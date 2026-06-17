@@ -1,0 +1,149 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: AWS EKS AIOps Data Stack containing S3, Secrets Manager and RDS MySQL
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: eks-aiops-demo
+    Description: Project name used for resource naming
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC ID where resources will be deployed (from Stack 01)
+
+  PrivateDataSubnets:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: The 3 Private Data Subnets for DB Subnet Group (from Stack 01)
+
+  RdsSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Security Group ID for RDS Database (from Stack 02)
+
+  DatabaseEngine:
+    Type: String
+    Default: mysql
+    AllowedValues: [mysql]
+    Description: Database engine type
+
+  DatabaseEngineVersion:
+    Type: String
+    Default: '8.0'
+    Description: Database engine version
+
+  DatabaseInstanceClass:
+    Type: String
+    Default: db.t3.micro
+    Description: Database instance class for testing (cost-efficient)
+
+  AllocatedStorage:
+    Type: Number
+    Default: 20
+    Description: Allocated storage size in GB for database
+
+Resources:
+  # =========================================================================
+  # 1. S3 Bucket (大倉庫：儲存網頁靜態檔與 K8sGPT 診斷日誌)
+  # =========================================================================
+  DataBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      # 自動帶入帳號 ID 確保 Bucket 全球名稱唯一
+      BucketName: !Sub "${ProjectName}-${AWS::AccountId}-data-bucket"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled # 開啟版本控制防止檔案被覆蓋
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256 # 自動加密儲存桶資料
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-data-bucket"
+        - Key: Project
+          Value: nkc201-17
+
+  # =========================================================================
+  # 2. Secrets Manager (保險金庫：自動生成並存放資料庫帳密)
+  # =========================================================================
+  DatabaseSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "${ProjectName}-rds-secret"
+      Description: Database credentials for RDS MySQL
+      GenerateSecretString:
+        SecretStringTemplate: '{"username": "admin"}'
+        GenerateStringKey: password
+        PasswordLength: 16
+        ExcludeCharacters: '"@/\' ' # 排除可能會破壞資料庫語法的特殊符號
+
+  # =========================================================================
+  # 3. RDS DB Subnet Group (資料庫專用網段群組)
+  # =========================================================================
+  DbSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subnet group for RDS database
+      SubnetIds: !Ref PrivateDataSubnets
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-db-subnet-group"
+        - Key: Project
+          Value: nkc201-17
+
+  # =========================================================================
+  # 4. RDS DB Instance (資料庫本體：儲存電商訂單與活動資料)
+  # =========================================================================
+  RdsDatabase:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: !Sub "${ProjectName}-rds-db"
+      Engine: !Ref DatabaseEngine
+      EngineVersion: !Ref DatabaseEngineVersion
+      DBInstanceClass: !Ref DatabaseInstanceClass
+      AllocatedStorage: !Ref AllocatedStorage
+      DBSubnetGroupName: !Ref DbSubnetGroup
+      VPCSecurityGroups:
+        - !Ref RdsSecurityGroupId
+      # 使用動態解析，直接從 Secrets Manager 中拉取帳密，安全不落地
+      MasterUsername: !Sub "{{resolve:secretsmanager:${DatabaseSecret}:SecretString:username}}"
+      MasterUserPassword: !Sub "{{resolve:secretsmanager:${DatabaseSecret}:SecretString:password}}"
+      PubliclyAccessible: false # 禁止公網存取，完全隱蔽於私有網段
+      MultiAZ: false # 測試階段不開 Multi-AZ，節省 1/2 資料庫費用
+      StorageType: gp3 # 使用高性價比的 gp3 儲存碟
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-rds-db"
+        - Key: Project
+          Value: nkc201-17
+
+# =========================================================================
+# Outputs
+# =========================================================================
+Outputs:
+  S3BucketName:
+    Description: Name of the created S3 Data Bucket
+    Value: !Ref DataBucket
+    Export:
+      Name: !Sub "${AWS::StackName}-S3BucketName"
+
+  SecretsManagerArn:
+    Description: ARN of the Secrets Manager Secret
+    Value: !Ref DatabaseSecret
+    Export:
+      Name: !Sub "${AWS::StackName}-SecretsManagerArn"
+
+  RdsEndpoint:
+    Description: Endpoint address of the RDS DB Instance
+    Value: !GetAtt RdsDatabase.Endpoint.Address
+    Export:
+      Name: !Sub "${AWS::StackName}-RdsEndpoint"
+
+  RdsPort:
+    Description: Port of the RDS DB Instance
+    Value: !GetAtt RdsDatabase.Endpoint.Port
+    Export:
+      Name: !Sub "${AWS::StackName}-RdsPort"
