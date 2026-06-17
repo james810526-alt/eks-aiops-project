@@ -37,16 +37,35 @@ winget install Kubernetes.kubectl
 # 安裝 AWS CLI 工具
 winget install Amazon.AWSCLI
 ```
-安裝完成重開視窗後，我們需要使用您的 AWS 帳號金鑰進行登入，這能證明您是這台電視（EKS）的合法主人：
-```powershell
-# 進行登入配置
-aws configure
-```
-執行後，系統會引導您填入以下四個資訊（請依提示輸入後按下 Enter）：
-1. `AWS Access Key ID [None]`: **輸入您的 AWS 金鑰 ID**
-2. `AWS Secret Access Key [None]`: **輸入您的 AWS 密鑰**
-3. `Default region name [None]`: `ap-south-1` *(我們專題所使用的孟買區域)*
-4. `Default output format [None]`: `json` *(預設使用 JSON 格式)*
+安裝完成重開視窗後，您需要進行身分驗證。這取決於您使用的是 **傳統 IAM 使用者金鑰** 還是 **AWS SSO (IAM Identity Center)**：
+
+#### 🟢 做法 A：使用傳統 IAM User Access Keys (最常見)
+這種做法是使用 IAM 服務中建立的永久性 Access Key。
+1. 前往 AWS Console -> **IAM** -> **Users** -> 點擊您的使用者名稱。
+2. 切換到 **Security credentials** 頁籤，找到 **Access keys** 並點選 **Create access key**。
+3. 取得您的 `Access Key ID` 與 `Secret Access Key`。
+4. 在 PowerShell 執行以下指令進行登入：
+   ```powershell
+   aws configure
+   ```
+5. 依提示填入資訊（輸入後按 Enter）：
+   - `AWS Access Key ID [None]`: **輸入您的 AWS 金鑰 ID**
+   - `AWS Secret Access Key [None]`: **輸入您的 AWS 密鑰**
+   - `Default region name [None]`: `ap-south-1` *(我們專題的孟買區域)*
+   - `Default output format [None]`: `json`
+
+#### 🟢 做法 B：使用 AWS SSO (IAM Identity Center)
+如果您的帳號是由學校、公司或 AWS Control Tower 派發的 SSO 帳號，請使用此方式：
+1. 在 PowerShell 執行以下指令：
+   ```powershell
+   aws configure sso
+   ```
+2. 依提示填入您的 SSO 資訊：
+   - `SSO session name [sso-session]`: *(自訂一個連線名稱，直接按 Enter 即可)*
+   - `SSO start URL [None]`: **輸入您的 SSO 入口網址** (例如 `https://d-xxxxxx.awsapps.com/start`)
+   - `SSO region [None]`: **輸入您的 SSO 所在區域** (通常為 `us-east-1` 或 `ap-southeast-1`，視您的 SSO 服務建在哪裡而定)
+3. 執行後會自動跳出瀏覽器，請在網頁上點擊 **Confirm and Allow** 授權登入。
+4. 網頁授權成功後，回到 PowerShell 選擇您要使用的 AWS 帳號與角色，並將預設區域設為 `ap-south-1`。
 
 ---
 
