@@ -90,38 +90,47 @@ aws sso login --profile james-dev
 
 ---
 
-### 3. 下載配對設定檔 (update-kubeconfig)
-當您的 EKS 叢集 CloudFormation 部署成功後，執行這行指令，將遠端 EKS 叢集的憑證與連線網址下載至本地電腦：
+### 3. 🔐 高安全架構：下載配對與連線說明 (透過 SSM 跳板機)
+
+> [!IMPORTANT]
+> **因為我們採取了「EKS 完全私有化」的高安全度架構：**
+> 您的 EKS 叢集已經關閉了公網端點 (`EndpointPublicAccess: false`)。因此，**您無法直接從本地電腦執行 `kubectl` 連線到 EKS**，所有維運指令都必須透過我們在 Stack 05 部署的 **SSM Bastion Host (安全跳板機)** 進行轉發或登入操作。
+
+#### 🟢 步驟 1：使用 SSM 登入私有跳板機 (無需 SSH 金鑰，免開 Port 22)
+在本地電腦的 PowerShell 中，執行以下指令登入跳板機 (請將 `<BastionInstanceId>` 替換為 Stack 05 Outputs 輸出的 `BastionInstanceId`，例如 `i-xxxxxxxxxxxx`)：
+
 ```powershell
-# 配對本地遙控器與遠端 EKS
-aws eks update-kubeconfig --region ap-south-1 --name eks-aiops-mumbai
+# 1. 確保已載入 AWS Profile 憑證
+$env:AWS_PROFILE="nkc201-17-sso"
+
+# 2. 啟動 SSM Session 登入跳板機
+aws ssm start-session --target <BastionInstanceId>
 ```
-- **指令白話解釋：** 「請 AWS 工具幫我把位於孟買區 (`ap-south-1`)、名字叫 `eks-aiops-mumbai` 的 EKS 控制大腦連線資料，同步到我這台電腦的遙控器設定檔 (`.kube/config`) 中。」
-- **成功畫面：** 畫面會顯示類似 `Added new context arn:aws:eks:... to C:\Users\您的帳號\.kube\config`。
+*登入成功後，您會進入 Linux 的 shell 畫面（例如 `sh-5.2$` 或 `[ssm-user@ip-...]`）。*
 
 ---
 
-### 4. 開始操控您的 EKS 叢集！
-配對成功後，您可以直接從您的本地電腦下指令來遙控遠端的 K8s 了：
+#### 🟢 步驟 2：在跳板機內下載配對設定檔 (update-kubeconfig)
+跳板機已自動附加了擁有 EKS 管理權限的 `EksNodeInstanceProfile` 證書。在跳板機的 Linux 終端機中，執行以下指令：
 
-#### 🟢 測試：查詢目前有哪些伺服器節點 (Nodes)
-```powershell
-kubectl get nodes
+```bash
+# 將跳板機與遠端私有 EKS 進行連線配對
+aws eks update-kubeconfig --region ap-south-1 --name eks-aiops-mumbai
 ```
-*(在您還沒有部署 Stack 05 Node Group 之前，此指令會返回 `No resources found`，這是正常的！當部署完節點後，就會顯示 3 台 EC2 執行個體狀態為 Ready)*
+* **成功畫面：** 會顯示 `Added new context arn:aws:eks:... to /home/ssm-user/.kube/config`。
 
-#### 🟢 測試：查詢目前運行中的基本應用程式 (Pods)
-```powershell
-# 查詢所有 Namespaces 下運行的 Pods 狀態
+---
+
+#### 🟢 步驟 3：開始在跳板機中操控您的 EKS 叢集！
+現在您已身處安全內網中，可以直接在跳板機上下指令來操控 EKS：
+
+```bash
+# 1. 查詢工作節點狀態
+kubectl get nodes
+
+# 2. 查詢所有命名空間下的 Pods 狀態
 kubectl get pods -A
 ```
-*(這會列出 coredns 與 aws-node 等 K8s 內建的底層管理系統 Pod 狀態)*
-
-#### 🟢 測試：查詢目前叢集的網路埠口服務 (Services)
-```powershell
-kubectl get svc -A
-```
-*(這會顯示 `kubernetes` API server 本身的內網 IP 服務)*
 
 ---
 

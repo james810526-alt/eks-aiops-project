@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: EKS Cluster Access Entry Stack to map IAM Roles to Kubernetes Policies
+Description: EKS Cluster Access Entry Stack to map IAM Roles to Kubernetes Policies and configure Pod Identity Associations
 
 Parameters:
   ProjectName:
@@ -69,6 +69,43 @@ Resources:
           Value: !Sub "${ProjectName}-codebuild-access"
         - Key: Project
           Value: nkc201-17
+
+  # =========================================================================
+  # 3. EKS Pod Identity Associations (對接 K8s ServiceAccount 與 IAM Role)
+  # =========================================================================
+
+  # 3.1 ALB Controller 權限綁定 (kube-system 命名空間)
+  AlbControllerPodIdentity:
+    Type: AWS::EKS::PodIdentityAssociation
+    Properties:
+      ClusterName:
+        Fn::ImportValue: !Sub "${ClusterStackName}-ClusterName"
+      Namespace: kube-system
+      ServiceAccount: aws-load-balancer-controller
+      RoleArn:
+        Fn::ImportValue: !Sub "${IamStackName}-AlbControllerRoleArn"
+
+  # 3.2 網頁 Pod S3 權限綁定 (web-prod 命名空間)
+  AppS3PodIdentity:
+    Type: AWS::EKS::PodIdentityAssociation
+    Properties:
+      ClusterName:
+        Fn::ImportValue: !Sub "${ClusterStackName}-ClusterName"
+      Namespace: web-prod
+      ServiceAccount: web-app-sa
+      RoleArn:
+        Fn::ImportValue: !Sub "${IamStackName}-AppS3RoleArn"
+
+  # 3.3 K8sGPT AI 權限綁定 (aiops 命名空間)
+  K8sGptPodIdentity:
+    Type: AWS::EKS::PodIdentityAssociation
+    Properties:
+      ClusterName:
+        Fn::ImportValue: !Sub "${ClusterStackName}-ClusterName"
+      Namespace: aiops
+      ServiceAccount: k8sgpt-sa
+      RoleArn:
+        Fn::ImportValue: !Sub "${IamStackName}-K8sGptRoleArn"
 
 # =========================================================================
 # Outputs

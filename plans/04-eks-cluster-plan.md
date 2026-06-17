@@ -63,7 +63,7 @@ Resources:
       ResourcesVpcConfig:
         SecurityGroupIds: !Ref SecurityGroupIds
         SubnetIds: !Ref SubnetIds
-        EndpointPublicAccess: true
+        EndpointPublicAccess: false
         EndpointPrivateAccess: true
       Tags:
         - Key: Name

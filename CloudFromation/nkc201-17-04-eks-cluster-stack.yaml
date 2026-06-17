@@ -44,8 +44,8 @@ Resources:
       ResourcesVpcConfig:
         SecurityGroupIds: !Ref SecurityGroupIds
         SubnetIds: !Ref SubnetIds
-        EndpointPublicAccess: true   # 第一版啟用公網存取，方便本地 kubectl 連線
-        EndpointPrivateAccess: true  # 內部節點通訊走私有通道
+        EndpointPublicAccess: false  # 關閉公網 API Server 以達到極致安全，後續透過 SSM 跳板機維運
+        EndpointPrivateAccess: true  # 內部節點與跳板機通訊走私有通道
       Tags:
         - Key: Name
           Value: !Ref ClusterName

@@ -190,13 +190,13 @@ Resources:
                 Action:
                   - s3:ListBucket
                   - s3:GetBucketLocation
-                Resource: 'arn:aws:s3:::*'
+                Resource: !Sub "arn:aws:s3:::${ProjectName}-${AWS::AccountId}-data-bucket"
               - Effect: Allow
                 Action:
                   - s3:GetObject
                   - s3:PutObject
                   - s3:DeleteObject
-                Resource: 'arn:aws:s3:::*/*'
+                Resource: !Sub "arn:aws:s3:::${ProjectName}-${AWS::AccountId}-data-bucket/*"
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-app-s3-role"
@@ -241,12 +241,14 @@ Resources:
                   - s3:ListBucket
                   - s3:GetObject
                   - s3:PutObject
-                Resource: 'arn:aws:s3:::*'
+                Resource:
+                  - !Sub "arn:aws:s3:::${ProjectName}-${AWS::AccountId}-data-bucket"
+                  - !Sub "arn:aws:s3:::${ProjectName}-${AWS::AccountId}-data-bucket/*"
               # 4. 允許從 Secrets Manager 讀取 LINE 等 API 金鑰
               - Effect: Allow
                 Action:
                   - secretsmanager:GetSecretValue
-                Resource: 'arn:aws:secretsmanager:*:*:secret:*'
+                Resource: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${ProjectName}-rds-secret-*"
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-k8sgpt-ai-role"

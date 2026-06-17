@@ -78,6 +78,16 @@ Parameters:
     Default: 20
     Description: Disk size in GB for node root volume (reduced to 20GB for cost-efficiency)
 
+  IamStackName:
+    Type: String
+    Default: nkc201-17-03-iam-stack
+    Description: Name of the IAM Stack to import Instance Profile
+
+  SecurityStackName:
+    Type: String
+    Default: nkc201-17-02-security-stack
+    Description: Name of the Security Stack to import Node Security Group
+
 Resources:
   EksNodeGroup:
     Type: AWS::EKS::Nodegroup
@@ -92,7 +102,7 @@ Resources:
         MinSize: !Ref MinSize
         MaxSize: !Ref MaxSize
       DiskSize: !Ref DiskSize
-      AmiType: AL2_x86_64
+      AmiType: AL2023_x86_64_STANDARD # 使用 Amazon Linux 2023 (最新推薦的最佳實踐)
       Labels:
         role: worker
         project: nkc201-17
@@ -111,6 +121,28 @@ Resources:
       ClusterName: !Ref ClusterName
       ResolveConflicts: OVERWRITE
 
+  # =========================================================================
+  # 3. SSM Bastion Host (安全跳板機：無公網 IP、無開放 SSH、採用 SSM 登入，負責私有管理 EKS)
+  # =========================================================================
+  BastionHost:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t3.micro
+      SubnetId: !Select [0, !Ref SubnetIds] # 部署於第一個 App 私有子網路中
+      SecurityGroupIds:
+        - Fn::ImportValue: !Sub "${SecurityStackName}-EksNodeSecurityGroupId" # 使用與 Node 相同的安全群組以直接連線 API Server
+      IamInstanceProfile:
+        Fn::ImportValue: !Sub "${IamStackName}-EksNodeInstanceProfileName" # 復用擁有 SSM 與 EKS 管理權限的 Instance Profile
+      ImageId: resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-x86_64 # 使用最新 AL2023 系統
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-bastion"
+        - Key: Project
+          Value: nkc201-17
+
+# =========================================================================
+# Outputs
+# =========================================================================
 Outputs:
   NodegroupName:
     Description: The name of the EKS Node Group
@@ -123,6 +155,12 @@ Outputs:
     Value: !GetAtt EksNodeGroup.Arn
     Export:
       Name: !Sub "${AWS::StackName}-NodegroupArn"
+
+  BastionInstanceId:
+    Description: The Instance ID of the SSM Bastion Host
+    Value: !Ref BastionHost
+    Export:
+      Name: !Sub "${AWS::StackName}-BastionInstanceId"
 ```
 
 ---
