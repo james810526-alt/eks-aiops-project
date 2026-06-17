@@ -1,0 +1,115 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: AWS EKS Cluster Control Plane Stack with standard addons
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: eks-aiops-demo
+    Description: Project name used for resource naming
+
+  ClusterName:
+    Type: String
+    Default: eks-aiops-mumbai
+    Description: The name of the EKS cluster
+
+  KubernetesVersion:
+    Type: String
+    Default: '1.30'
+    Description: Kubernetes Version of the EKS cluster
+
+  EksClusterRoleArn:
+    Type: String
+    Description: ARN of the IAM role for EKS cluster control plane (from Stack 03)
+
+  SecurityGroupIds:
+    Type: List<AWS::EC2::SecurityGroup::Id>
+    Description: Security Group to associate with the cluster control plane (from Stack 02)
+
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: The 3 Private App Subnet IDs for EKS control plane (from Stack 01)
+
+Resources:
+  # =========================================================================
+  # EKS Cluster (K8s 管理大腦 / 控制面)
+  # =========================================================================
+  EksCluster:
+    Type: AWS::EKS::Cluster
+    Properties:
+      Name: !Ref ClusterName
+      Version: !Ref KubernetesVersion
+      RoleArn: !Ref EksClusterRoleArn
+      ResourcesVpcConfig:
+        SecurityGroupIds: !Ref SecurityGroupIds
+        SubnetIds: !Ref SubnetIds
+        EndpointPublicAccess: true   # 第一版啟用公網存取，方便本地 kubectl 連線
+        EndpointPrivateAccess: true  # 內部節點通訊走私有通道
+      Tags:
+        - Key: Name
+          Value: !Ref ClusterName
+        - Key: Project
+          Value: nkc201-17
+
+  # =========================================================================
+  # EKS Addons (K8s 基礎維運外掛元件)
+  # =========================================================================
+
+  # 1. AWS VPC CNI (負責指派 VPC 實體 IP 給 Pod，達高網路效能)
+  VpcCniAddon:
+    Type: AWS::EKS::Addon
+    Properties:
+      AddonName: vpc-cni
+      ClusterName: !Ref EksCluster
+      ResolveConflicts: OVERWRITE
+
+  # 2. CoreDNS (負責叢集內 Pod 之間的 DNS 網址解析)
+  CoreDnsAddon:
+    Type: AWS::EKS::Addon
+    Properties:
+      AddonName: coredns
+      ClusterName: !Ref EksCluster
+      ResolveConflicts: OVERWRITE
+
+  # 3. Kube-Proxy (負責叢集內的網路服務負載分流與轉發)
+  KubeProxyAddon:
+    Type: AWS::EKS::Addon
+    Properties:
+      AddonName: kube-proxy
+      ClusterName: !Ref EksCluster
+      ResolveConflicts: OVERWRITE
+
+  # 4. EKS Pod Identity Agent (EKS Pod 權限代理，讓 Pod 能動態取得 IAM 角色權限)
+  PodIdentityAddon:
+    Type: AWS::EKS::Addon
+    Properties:
+      AddonName: eks-pod-identity-agent
+      ClusterName: !Ref EksCluster
+      ResolveConflicts: OVERWRITE
+
+# =========================================================================
+# Outputs
+# =========================================================================
+Outputs:
+  ClusterName:
+    Description: The name of the EKS Cluster
+    Value: !Ref EksCluster
+    Export:
+      Name: !Sub "${AWS::StackName}-ClusterName"
+
+  ClusterArn:
+    Description: The ARN of the EKS Cluster
+    Value: !GetAtt EksCluster.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-ClusterArn"
+
+  ClusterEndpoint:
+    Description: EKS Cluster API Server Endpoint
+    Value: !GetAtt EksCluster.Endpoint
+    Export:
+      Name: !Sub "${AWS::StackName}-ClusterEndpoint"
+
+  ClusterSecurityGroupId:
+    Description: EKS security group created by AWS EKS service itself
+    Value: !GetAtt EksCluster.ClusterSecurityGroupId
+    Export:
+      Name: !Sub "${AWS::StackName}-ClusterSecurityGroupId"
