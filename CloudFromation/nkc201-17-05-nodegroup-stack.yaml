@@ -1,0 +1,87 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: AWS EKS Managed Node Group Stack for cost-efficient student testing
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: eks-aiops-demo
+    Description: Project name used for resource naming
+
+  ClusterName:
+    Type: String
+    Default: eks-aiops-mumbai
+    Description: Name of the existing EKS Cluster
+
+  NodeRoleArn:
+    Type: String
+    Description: IAM Role ARN for EKS Node Group (from Stack 03)
+
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Select the 3 Private App Subnets where nodes will be launched (from Stack 01)
+
+  InstanceTypes:
+    Type: CommaDelimitedList
+    Default: t3.medium
+    Description: EC2 instance type for the EKS nodes (t3.medium is minimum required for system memory)
+
+  DesiredSize:
+    Type: Number
+    Default: 2
+    Description: Desired number of worker nodes (set to 2 for budget saving)
+
+  MinSize:
+    Type: Number
+    Default: 2
+    Description: Minimum number of worker nodes
+
+  MaxSize:
+    Type: Number
+    Default: 4
+    Description: Maximum number of worker nodes
+
+  DiskSize:
+    Type: Number
+    Default: 20
+    Description: Disk size in GB for node root volume (reduced to 20GB for cost-efficiency)
+
+Resources:
+  # =========================================================================
+  # EKS Managed Node Group (託管工作節點群組 - 工人的工作區)
+  # =========================================================================
+  EksNodeGroup:
+    Type: AWS::EKS::Nodegroup
+    Properties:
+      ClusterName: !Ref ClusterName
+      NodegroupName: app-nodegroup
+      NodeRole: !Ref NodeRoleArn
+      Subnets: !Ref SubnetIds
+      InstanceTypes: !Ref InstanceTypes
+      ScalingConfig:
+        DesiredSize: !Ref DesiredSize
+        MinSize: !Ref MinSize
+        MaxSize: !Ref MaxSize
+      DiskSize: !Ref DiskSize
+      AmiType: AL2_x86_64 # 使用 Amazon Linux 2 作為節點作業系統
+      Labels:
+        role: worker
+        project: nkc201-17
+      Tags:
+        Name: !Sub "${ProjectName}-node"
+        Project: nkc201-17
+
+# =========================================================================
+# Outputs
+# =========================================================================
+Outputs:
+  NodegroupName:
+    Description: The name of the EKS Node Group
+    Value: !Ref EksNodeGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-NodegroupName"
+
+  NodegroupArn:
+    Description: The ARN of the EKS Node Group
+    Value: !GetAtt EksNodeGroup.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-NodegroupArn"
