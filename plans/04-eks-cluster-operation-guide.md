@@ -56,6 +56,8 @@ winget install Amazon.AWSCLI
 
 #### 🟢 做法 B：使用 AWS SSO (IAM Identity Center)
 如果您的帳號是由學校、公司或 AWS Control Tower 派發的 SSO 帳號，請使用此方式：
+
+##### 1. 初次設定時 (建立 Profile)
 1. 在 PowerShell 執行以下指令：
    ```powershell
    aws configure sso
@@ -65,7 +67,26 @@ winget install Amazon.AWSCLI
    - `SSO start URL [None]`: **輸入您的 SSO 入口網址** (例如 `https://d-xxxxxx.awsapps.com/start`)
    - `SSO region [None]`: **輸入您的 SSO 所在區域** (通常為 `us-east-1` 或 `ap-southeast-1`，視您的 SSO 服務建在哪裡而定)
 3. 執行後會自動跳出瀏覽器，請在網頁上點擊 **Confirm and Allow** 授權登入。
-4. 網頁授權成功後，回到 PowerShell 選擇您要使用的 AWS 帳號與角色，並將預設區域設為 `ap-south-1`。
+4. 網頁授權成功後，回到 PowerShell 選擇您要使用的 AWS 帳號與角色，並在最後提示命名 CLI profile name 時輸入一個您好記的名稱（例如 `james-dev`），並將預設區域設為 `ap-south-1`。
+
+##### 2. 日後登入時 (直接使用 Profile 登入)
+如果您以前就已經完成上述設定，日後重新開機或登入過期時，**不需要重複設定**，直接執行此指令即可快速觸發瀏覽器進行登入：
+```powershell
+aws sso login --profile james-dev
+```
+*(請將 `james-dev` 替換為您當初命名的 Profile 名稱)*
+
+* **日後執行指令方式：**
+  當您使用此 Profile 登入後，後續所有 AWS 指令後面都要加上 `--profile` 參數以指定身分：
+  ```powershell
+  aws ec2 describe-vpcs --profile james-dev
+  ```
+* **懶人免打 Profile 小技巧：**
+  如果覺得每次都要加上 `--profile` 太麻煩，可以在當前 PowerShell 視窗先執行一次這行環境變數設定：
+  ```powershell
+  $env:AWS_PROFILE="james-dev"
+  ```
+  執行後，該視窗內後續所有的 AWS 指令（包含 `aws eks update-kubeconfig` 等）都會預設直接以該 Profile 執行，不需再手動打 `--profile`。
 
 ---
 
@@ -101,3 +122,49 @@ kubectl get pods -A
 kubectl get svc -A
 ```
 *(這會顯示 `kubernetes` API server 本身的內網 IP 服務)*
+
+---
+
+### 5. 💡 補充：什麼是 `--capabilities CAPABILITY_NAMED_IAM`？
+在部署 `03 IAM Stack` 時，您會在部署指令最後看到 `--capabilities CAPABILITY_NAMED_IAM`：
+- **為什麼需要它：** 在 AWS 中，建立 IAM 角色（Role）或權限（Policy）是非常敏感的安全操作（代表發放可以進出系統的鑰匙）。為了防止開發人員無意間執行不明範本，建立出權限過大或有安全疑慮的角色，AWS 規定部署時必須有明確的「安全切結授權」。
+- **比喻（大額提款切結書）：** 就像去銀行辦理大額提款或授權，櫃檯行員一定會遞上單子要求您「簽字蓋章確認」一樣。
+  - **在網頁主控台 (Console)：** 部署最後一步時，您必須手動勾選網頁最底下的黃色方框「*我確認 AWS CloudFormation 可能會建立具有自訂名稱的 IAM 資源*」。
+  - **在 CLI 命令列：** 由於沒有瀏覽器網頁可按，您必須主動在指令尾端加上 `--capabilities CAPABILITY_NAMED_IAM`。如果漏掉這個參數，AWS 會直接中斷部署並回傳 `Requires capabilities : [CAPABILITY_NAMED_IAM]` 的錯誤。
+
+---
+
+### 6. 💡 補充：Windows PowerShell 部署遇到文字編碼錯誤怎麼辦？
+在 Windows 上使用 AWS CLI 部署 CloudFormation 時，如果您的 YAML 檔案內包含中文註解，可能會遇到以下錯誤：
+`An error occurred (ParamValidation): Error parsing parameter '--template-body': Unable to load paramfile..., text contents could not be decoded. If this is a binary file, please use the fileb:// prefix instead of the fileb://...`
+
+- **為什麼會這樣：** Windows 系統底層預設使用舊式 ANSI (CP950) 編碼，而我們的 YAML 檔案是用 UTF-8 儲存中文。當 AWS CLI 內部試圖解析 `file://` 時，會因為編碼衝突而失敗；若改用 `fileb://` 則會因為 AWS 限制 `--template-body` 只能接受「純文字字串」而報錯類型不符。
+- **黃金解決方案：** 
+  利用 PowerShell 的原生指令 `(Get-Content -Raw -Encoding UTF8)` 預先讀取檔案成 UTF-8 文字，再直接塞給 AWS CLI。
+  
+  **範例 A：部署 02 Security Stack**
+  ```powershell
+  aws cloudformation create-stack `
+    --stack-name nkc201-17-security `
+    --template-body (Get-Content CloudFromation/nkc201-17-02-security-stack.yaml -Raw -Encoding UTF8) `
+    --parameters ParameterKey=VpcId,ParameterValue=vpc-00f9f872d1cede59e
+  ```
+
+  **範例 B：部署 03 IAM Stack**
+  ```powershell
+  aws cloudformation create-stack `
+    --stack-name nkc201-17-iam `
+    --template-body (Get-Content CloudFromation/nkc201-17-03-iam-stack.yaml -Raw -Encoding UTF8) `
+    --capabilities CAPABILITY_NAMED_IAM
+  ```
+
+  **範例 C：部署 04 EKS Cluster Stack**
+  ```powershell
+  aws cloudformation create-stack `
+    --stack-name nkc201-17-cluster `
+    --template-body (Get-Content CloudFromation/nkc201-17-04-eks-cluster-stack.yaml -Raw -Encoding UTF8) `
+    --parameters `
+      ParameterKey=EksClusterRoleArn,ParameterValue=<您的EksClusterRoleArn> `
+      ParameterKey=SecurityGroupIds,ParameterValue=<您的EksClusterSecurityGroupId> `
+      ParameterKey=SubnetIds,ParameterValue=<PrivateAppSubnetA的ID>,<PrivateAppSubnetB的ID>,<PrivateAppSubnetC的ID>
+  ```
