@@ -15,9 +15,9 @@
 ### 2. 💻 EKS Node 安全群組 (員工辦公區保安)
 - **比喻：** 實際放置伺服器和容器的工作區域。
 - **規則：**
-  1. 訪客必須先通過大廳保安 (ALB SG) 的過濾引導。
+  1. 訪客必須先通過大廳保安 (ALB SG) 的過濾引導。因為 K8s ALB Controller 採用 IP 模式將流量直連 Pod，我們放行來自 ALB SG 的所有 TCP 埠口 (0-65535)，以適配各式各樣的 App 容器監聽埠口與健康檢查。
   2. 允許經理室的保安 (EKS Cluster SG) 進來發布指令 (Port 443 與隨機埠口)。
-  3. 辦公區內的同仁可以直接交談不用每次申報（這在 CloudFormation 中稱為 **Self-reference 自我關聯**）。
+  3. 辦公區內的同仁可以直接交談不用每次申報 (這在 CloudFormation 中稱為 **Self-reference 自我關聯**)。
 
 ### 3. 🧠 EKS Cluster 安全群組 (經理辦公室保安)
 - **比喻：** Kubernetes 的管理大腦 (Control Plane)。
@@ -136,25 +136,15 @@ Resources:
           Value: nkc201-17
 
   # 5. Ingress Rules (Cross-References)
-  AlbToNodeIngress80:
+  AlbToNodeIngressAllTCP:
     Type: AWS::EC2::SecurityGroupIngress
     Properties:
       GroupId: !Ref EksNodeSecurityGroup
       SourceSecurityGroupId: !Ref AlbSecurityGroup
       IpProtocol: tcp
-      FromPort: 80
-      ToPort: 80
-      Description: Allow ALB to talk to nodes on HTTP
-
-  AlbToNodeIngress443:
-    Type: AWS::EC2::SecurityGroupIngress
-    Properties:
-      GroupId: !Ref EksNodeSecurityGroup
-      SourceSecurityGroupId: !Ref AlbSecurityGroup
-      IpProtocol: tcp
-      FromPort: 443
-      ToPort: 443
-      Description: Allow ALB to talk to nodes on HTTPS
+      FromPort: 0
+      ToPort: 65535
+      Description: Allow ALB to talk to nodes on any TCP port for target routing
 
   ClusterToNodeIngress443:
     Type: AWS::EC2::SecurityGroupIngress
