@@ -13,7 +13,12 @@
 - **網卡 IP 分配上限：** `t3.micro` 的硬體限制了它最多只能運行 4 個 Pods（扣掉內建的，只能再放 2 個 Pod）。而 `t3.medium` 可以運行 17 個 Pods。
 - **結論：** **`t3.medium` 是 EKS 正常運作的最低硬體門檻。**
 
-### 3. 💰 專題省錢優化設計
+### 3. 🔌 CoreDNS 部署優化 (延遲至節點準備就緒)
+- **排程依賴**：CoreDNS 以 Deployment 形式運行（預設 2 副本），必須有實體節點才能進行排程。
+- **避免逾時**：若在 Stack 04 (只有控制面，無節點) 建立 CoreDNS Addon，Addon 將因無法排程而長期待在 `DEGRADED` 狀態，導致 CloudFormation 出現 20 分鐘的建立逾時與失敗。
+- **解決方案**：將 CoreDNS Addon 移動至本 Stack，並宣告 `DependsOn: EksNodeGroup`。當工作節點順利啟動並加入叢集後，才安裝 CoreDNS，使其能瞬間完成排程，快速變成 `ACTIVE`。
+
+### 4. 💰 專題省錢優化設計
 為了解決學術專題的預算考量，我們在模板中進行了以下優化：
 - **硬碟調降：** 從預設的 30GB 降低至 **20GB**，省下 EBS 儲存空間月租費。
 - **數量調降：** 初始與最少數量從 3 台調降至 **2 台**（能跨 2 個 AZ 通訊，省下 1/3 的 EC2 費用）。
@@ -94,6 +99,17 @@ Resources:
       Tags:
         Name: !Sub "${ProjectName}-node"
         Project: nkc201-17
+
+  # =========================================================================
+  # 2. CoreDNS Addon (負責 K8s 內部 DNS 解析，依賴工作節點存在以進行排程)
+  # =========================================================================
+  CoreDnsAddon:
+    Type: AWS::EKS::Addon
+    DependsOn: EksNodeGroup
+    Properties:
+      AddonName: coredns
+      ClusterName: !Ref ClusterName
+      ResolveConflicts: OVERWRITE
 
 Outputs:
   NodegroupName:

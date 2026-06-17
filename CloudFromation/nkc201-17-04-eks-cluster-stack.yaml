@@ -64,15 +64,7 @@ Resources:
       ClusterName: !Ref EksCluster
       ResolveConflicts: OVERWRITE
 
-  # 2. CoreDNS (負責叢集內 Pod 之間的 DNS 網址解析)
-  CoreDnsAddon:
-    Type: AWS::EKS::Addon
-    Properties:
-      AddonName: coredns
-      ClusterName: !Ref EksCluster
-      ResolveConflicts: OVERWRITE
-
-  # 3. Kube-Proxy (負責叢集內的網路服務負載分流與轉發)
+  # 2. Kube-Proxy (負責叢集內的網路服務負載分流與轉發)
   KubeProxyAddon:
     Type: AWS::EKS::Addon
     Properties:

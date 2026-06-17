@@ -70,6 +70,17 @@ Resources:
         Name: !Sub "${ProjectName}-node"
         Project: nkc201-17
 
+  # =========================================================================
+  # 2. CoreDNS Addon (負責 K8s 內部 DNS 解析，依賴工作節點存在以進行排程)
+  # =========================================================================
+  CoreDnsAddon:
+    Type: AWS::EKS::Addon
+    DependsOn: EksNodeGroup
+    Properties:
+      AddonName: coredns
+      ClusterName: !Ref ClusterName
+      ResolveConflicts: OVERWRITE
+
 # =========================================================================
 # Outputs
 # =========================================================================

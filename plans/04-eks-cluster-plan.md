@@ -11,7 +11,7 @@
 ### 2. 🔌 四大外掛 Addons (大樓基本維運水電系統)
 為了讓指揮部正常運作，大樓需要配備核心系統：
 - **VPC CNI (配電系統)：** 讓 Pod 可以直接獲得 VPC 的實體 IP，就像大樓裡的每個機器直接插上獨立插座一樣，傳輸速度最快。
-- **CoreDNS (內部通訊簿)：** Pod 之間打電話找對方時，不需要去記複雜的 IP 地址，只要查 CoreDNS 的「分機名稱」即可。
+- **CoreDNS (內部通訊簿)：** Pod 之間打電話找對方時，不需要去記複雜的 IP 地址，只要查 CoreDNS 的「分機名稱」即可。*(⚠️ 為了避免在無工作節點時安裝導致 CloudFormation 部署逾時，CoreDNS 已挪至 Stack 05 與工作節點同步安裝)*
 - **Kube-Proxy (走廊指引員)：** 指引網絡流量，如果有外部流量進入，它負責平均分配給工作的 Pod 們。
 - **EKS Pod Identity Agent (臨時證派發機)：** 負責為 Pod 檢查 IAM 識別證，並派發有時效性的臨時金鑰，讓 ALB Controller 和 K8sGPT 能夠呼叫 AWS 服務。
 
@@ -75,13 +75,6 @@ Resources:
     Type: AWS::EKS::Addon
     Properties:
       AddonName: vpc-cni
-      ClusterName: !Ref EksCluster
-      ResolveConflicts: OVERWRITE
-
-  CoreDnsAddon:
-    Type: AWS::EKS::Addon
-    Properties:
-      AddonName: coredns
       ClusterName: !Ref EksCluster
       ResolveConflicts: OVERWRITE
 
