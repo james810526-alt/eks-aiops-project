@@ -117,6 +117,7 @@ Resources:
   # 4. RDS DB Instance
   RdsDatabase:
     Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
     Properties:
       DBInstanceIdentifier: !Sub "${ProjectName}-rds-db"
       Engine: !Ref DatabaseEngine
@@ -131,6 +132,8 @@ Resources:
       PubliclyAccessible: false
       MultiAZ: false
       StorageType: gp3
+      StorageEncrypted: true
+      BackupRetentionPeriod: 7
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-rds-db"
