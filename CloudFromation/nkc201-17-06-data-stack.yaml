@@ -114,6 +114,7 @@ Resources:
       PubliclyAccessible: false # 禁止公網存取，完全隱蔽於私有網段
       MultiAZ: false # 測試階段不開 Multi-AZ，節省 1/2 資料庫費用
       StorageType: gp3 # 使用高性價比的 gp3 儲存碟
+      StorageEncrypted: true # 開啟資料庫儲存加密，採用預設 aws/rds KMS 金鑰 (免費)
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-rds-db"
