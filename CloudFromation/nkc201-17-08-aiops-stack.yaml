@@ -1,0 +1,299 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: AWS EKS AIOps Stack for Alerting, LLM Diagnosis, and Auto-Remediation
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: eks-aiops-demo
+    Description: Project name used for resource naming
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC ID where resources are deployed (from Stack 01)
+
+  PrivateSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Private App Subnets where Lambda and CodeBuild will run (from Stack 01)
+
+  SecurityStackName:
+    Type: String
+    Default: nkc201-17-02-security-stack
+    Description: Name of the Security Stack to import Node Security Group
+
+  ClusterStackName:
+    Type: String
+    Default: nkc201-17-04-eks-cluster-stack
+    Description: Name of the EKS Cluster Stack to import ClusterName
+
+  IamStackName:
+    Type: String
+    Default: nkc201-17-03-iam-stack
+    Description: Name of the IAM Stack to import CodeBuild Role ARN
+
+  EngineerEmail:
+    Type: String
+    Default: james810526@gmail.com
+    Description: Email address for engineer alerts
+
+Resources:
+  # =========================================================================
+  # 1. Amazon SNS 告警主題 (警報廣播器)
+  # =========================================================================
+  AlertsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "${ProjectName}-alerts-topic"
+
+  EmailSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref AlertsTopic
+      Protocol: email
+      Endpoint: !Ref EngineerEmail
+
+  # =========================================================================
+  # 2. DynamoDB 告警冷卻快取表 (防止告警風暴)
+  # =========================================================================
+  AlertCacheTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${ProjectName}-alert-cache"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: AlertHash
+          AttributeType: S
+      KeySchema:
+        - AttributeName: AlertHash
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: ExpiryTime
+        Enabled: true
+
+  # =========================================================================
+  # 3. AWS Lambda 執行角色 (AI 大腦的護照)
+  # =========================================================================
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-lambda-aiops-role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        # 允許 Lambda 在 VPC 中建立網路介面以進行內網通訊
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      Policies:
+        - PolicyName: LambdaAIOpsPermissions
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # 3.1 允許調用 Amazon Bedrock 孟買區 LLM
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource: 'arn:aws:bedrock:*::foundation-model/*'
+              # 3.2 允許發送告警至專用 SNS
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: !Ref AlertsTopic
+              # 3.3 允許讀寫 DynamoDB 快取
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                Resource: !GetAtt AlertCacheTable.Arn
+              # 3.4 允許觸發 CodeBuild 自動修復
+              - Effect: Allow
+                Action:
+                  - codebuild:StartBuild
+                Resource: !GetAtt RemediationProject.Arn
+
+  # =========================================================================
+  # 4. AWS Lambda Function (AIOps 核心大腦)
+  # =========================================================================
+  AioOpsHandler:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-aiops-handler"
+      Runtime: python3.11
+      Handler: index.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 120 # Bedrock 思考可能耗時，超時設為 2 分鐘
+      MemorySize: 256
+      Environment:
+        Variables:
+          DYNAMODB_TABLE: !Ref AlertCacheTable
+          SNS_TOPIC_ARN: !Ref AlertsTopic
+          CLUSTER_NAME:
+            Fn::ImportValue: !Sub "${ClusterStackName}-ClusterName"
+          CODEBUILD_PROJECT: !Ref RemediationProject
+      VpcConfig:
+        SubnetIds: !Ref PrivateSubnetIds
+        SecurityGroupIds:
+          - Fn::ImportValue: !Sub "${SecurityStackName}-EksNodeSecurityGroupId" # 使用與 Node 相同的 SG 進行內網連線
+      Code:
+        ZipFile: |
+          import json
+          import os
+          import boto3
+
+          def handler(event, context):
+              print("Received event:", json.dumps(event))
+              path = event.get('rawPath', '')
+              
+              if path == '/webhook':
+                  # 處理來自 K8sGPT 的 Webhook 告警
+                  body_str = event.get('body', '{}')
+                  try:
+                      body = json.loads(body_str)
+                  except Exception:
+                      body = {}
+                  return {
+                      'statusCode': 200,
+                      'body': json.dumps({'message': 'Webhook received successfully', 'data': body})
+                  }
+                  
+              elif path == '/approve':
+                  # 工程師點擊核准修復
+                  return {
+                      'statusCode': 200,
+                      'body': '<html><body><h1 style="color:green;">Remediation Approved</h1><p>Triggering automatic fix via CodeBuild...</p></body></html>',
+                      'headers': {'Content-Type': 'text/html; charset=utf-8'}
+                  }
+                  
+              elif path == '/reject':
+                  # 工程師點擊拒絕修復
+                  return {
+                      'statusCode': 200,
+                      'body': '<html><body><h1 style="color:red;">Remediation Rejected</h1><p>Remediation canceled by engineer.</p></body></html>',
+                      'headers': {'Content-Type': 'text/html; charset=utf-8'}
+                  }
+                  
+              return {
+                  'statusCode': 404,
+                  'body': 'Not Found'
+              }
+
+  # =========================================================================
+  # 5. Amazon API Gateway (跳板機 / Webhook 對外聯絡點)
+  # =========================================================================
+  AioOpsApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub "${ProjectName}-api"
+      ProtocolType: HTTP
+
+  # API Gateway 整合 Lambda
+  ApiLambdaIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref AioOpsApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt AioOpsHandler.Arn
+      PayloadFormatVersion: "2.0"
+
+  WebhookRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref AioOpsApi
+      RouteKey: "POST /webhook"
+      Target: !Sub "integrations/${ApiLambdaIntegration}"
+
+  ApproveRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref AioOpsApi
+      RouteKey: "GET /approve"
+      Target: !Sub "integrations/${ApiLambdaIntegration}"
+
+  RejectRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref AioOpsApi
+      RouteKey: "GET /reject"
+      Target: !Sub "integrations/${ApiLambdaIntegration}"
+
+  ApiStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref AioOpsApi
+      StageName: "$default"
+      AutoDeploy: true
+
+  LambdaPermissionForApi:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt AioOpsHandler.Arn
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${AioOpsApi}/*"
+
+  # =========================================================================
+  # 6. AWS CodeBuild Project (私有網絡內的自動修復機器人)
+  # =========================================================================
+  RemediationProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub "${ProjectName}-remediation"
+      Description: Runs in VPC to apply kubectl patches on Private EKS Cluster
+      ServiceRole:
+        Fn::ImportValue: !Sub "${IamStackName}-CodeBuildRoleArn"
+      TimeoutInMinutes: 10
+      Artifacts:
+        Type: NO_ARTIFACTS
+      VpcConfig:
+        VpcId: !Ref VpcId
+        Subnets: !Ref PrivateSubnetIds
+        SecurityGroupIds:
+          - Fn::ImportValue: !Sub "${SecurityStackName}-EksNodeSecurityGroupId" # 借用節點 SG 繞過 API Server 私有端點限制
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:5.0
+        Type: LINUX_CONTAINER
+        EnvironmentVariables:
+          - Name: CLUSTER_NAME
+            Value:
+              Fn::ImportValue: !Sub "${ClusterStackName}-ClusterName"
+          - Name: REM_COMMAND
+            Value: "echo No command provided"
+      Source:
+        Type: NO_SOURCE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            install:
+              commands:
+                - echo "Installing kubectl..."
+                - curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+                - chmod +x kubectl
+                - mv kubectl /usr/local/bin/
+            pre_build:
+              commands:
+                - echo "Configuring connection to Private EKS..."
+                - aws eks update-kubeconfig --region $AWS_DEFAULT_REGION --name $CLUSTER_NAME
+            build:
+              commands:
+                - echo "Applying remediation command..."
+                - eval "$REM_COMMAND"
+
+# =========================================================================
+# Outputs
+# =========================================================================
+Outputs:
+  ApiEndpoint:
+    Description: HTTP API Gateway Endpoint URL
+    Value: !GetAtt AioOpsApi.ApiEndpoint
+    Export:
+      Name: !Sub "${AWS::StackName}-ApiEndpoint"
+
+  SnsTopicArn:
+    Description: ARN of the SNS alerts topic
+    Value: !Ref AlertsTopic
+    Export:
+      Name: !Sub "${AWS::StackName}-SnsTopicArn"

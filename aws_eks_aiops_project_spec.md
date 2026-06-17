@@ -855,15 +855,13 @@ CI/CD 權限
 建立：
 
 ```text
-SNS
-Lambda
-EventBridge
-API Gateway
-CodeBuild
-Bedrock 權限
-S3 診斷報告區
-DynamoDB (告警去重快取表)
+SNS (告警主題與郵件訂閱)
+Lambda (智能維運處理器，整合 Bedrock)
+API Gateway (對外 Webhook 與審批路由)
+CodeBuild (VPC 內網自動修復專案)
+DynamoDB (告警冷卻快取表，防止重複發送)
 ```
+
 
 ---
 
