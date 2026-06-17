@@ -1,0 +1,87 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: EKS Cluster Access Entry Stack to map IAM Roles to Kubernetes Policies
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: eks-aiops-demo
+    Description: Project name used for resource naming
+
+  ClusterStackName:
+    Type: String
+    Default: nkc201-17-04-eks-cluster-stack
+    Description: The name of the EKS Cluster CloudFormation Stack to import ClusterName
+
+  IamStackName:
+    Type: String
+    Default: nkc201-17-03-iam-stack
+    Description: The name of the IAM CloudFormation Stack to import Role ARNs
+
+Resources:
+  # =========================================================================
+  # 1. 授權工程師權限 (限縮在特定命名空間 web-prod 與 aiops)
+  # =========================================================================
+  EngineerAccessEntry:
+    Type: AWS::EKS::AccessEntry
+    Properties:
+      ClusterName:
+        Fn::ImportValue: !Sub "${ClusterStackName}-ClusterName"
+      PrincipalArn:
+        Fn::ImportValue: !Sub "${IamStackName}-EngineerRoleArn"
+      Type: STANDARD
+      # 綁定 Kubernetes 權限策略
+      AccessPolicies:
+        # 1.1 在 web-prod 和 aiops 命名空間下擁有管理員 (Admin) 權限
+        - PolicyArn: arn:aws:eks::aws:cluster-access-policy/AmazonEKSAdminPolicy
+          AccessScope:
+            Type: namespace
+            Namespaces:
+              - web-prod
+              - aiops
+        # 1.2 在整個叢集級別擁有唯讀 (Viewer) 權限，便於查看 Node 狀態
+        - PolicyArn: arn:aws:eks::aws:cluster-access-policy/AmazonEKSViewerPolicy
+          AccessScope:
+            Type: cluster
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-engineer-access"
+        - Key: Project
+          Value: nkc201-17
+
+  # =========================================================================
+  # 2. 授權 CI/CD 自動化修復權限 (EKS 叢集全域管理員)
+  # =========================================================================
+  CodeBuildAccessEntry:
+    Type: AWS::EKS::AccessEntry
+    Properties:
+      ClusterName:
+        Fn::ImportValue: !Sub "${ClusterStackName}-ClusterName"
+      PrincipalArn:
+        Fn::ImportValue: !Sub "${IamStackName}-CodeBuildRoleArn"
+      Type: STANDARD
+      AccessPolicies:
+        # 2.1 叢集全域管理員：讓 CodeBuild 可以對任意 Namespace 套用修正
+        - PolicyArn: arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy
+          AccessScope:
+            Type: cluster
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-codebuild-access"
+        - Key: Project
+          Value: nkc201-17
+
+# =========================================================================
+# Outputs
+# =========================================================================
+Outputs:
+  EngineerAccessEntryArn:
+    Description: ARN of the Engineer Access Entry
+    Value: !GetAtt EngineerAccessEntry.AccessEntryArn
+    Export:
+      Name: !Sub "${AWS::StackName}-EngineerAccessEntryArn"
+
+  CodeBuildAccessEntryArn:
+    Description: ARN of the CodeBuild Access Entry
+    Value: !GetAtt CodeBuildAccessEntry.AccessEntryArn
+    Export:
+      Name: !Sub "${AWS::StackName}-CodeBuildAccessEntryArn"

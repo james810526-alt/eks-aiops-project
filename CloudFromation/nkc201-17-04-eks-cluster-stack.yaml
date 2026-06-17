@@ -39,6 +39,8 @@ Resources:
       Name: !Ref ClusterName
       Version: !Ref KubernetesVersion
       RoleArn: !Ref EksClusterRoleArn
+      AccessConfig:
+        AuthenticationMode: API_AND_CONFIG_MAP
       ResourcesVpcConfig:
         SecurityGroupIds: !Ref SecurityGroupIds
         SubnetIds: !Ref SubnetIds
