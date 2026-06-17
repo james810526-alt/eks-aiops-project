@@ -117,7 +117,7 @@ Resources:
   # 4. RDS DB Instance
   RdsDatabase:
     Type: AWS::RDS::DBInstance
-    DeletionPolicy: Snapshot
+    DeletionPolicy: Delete
     Properties:
       DBInstanceIdentifier: !Sub "${ProjectName}-rds-db"
       Engine: !Ref DatabaseEngine
