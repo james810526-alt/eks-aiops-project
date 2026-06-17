@@ -46,6 +46,11 @@ Resources:
         SubnetIds: !Ref SubnetIds
         EndpointPublicAccess: false  # 關閉公網 API Server 以達到極致安全，後續透過 SSM 跳板機維運
         EndpointPrivateAccess: true  # 內部節點與跳板機通訊走私有通道
+      Logging:
+        ClusterLogging:
+          EnabledTypes:
+            - Type: audit         # 啟用審計日誌，監控所有 kubectl 操作與自動化修復指令
+            - Type: authenticator # 啟用認證日誌，追蹤 IAM 與 K8s 權限的登入對接
       Tags:
         - Key: Name
           Value: !Ref ClusterName

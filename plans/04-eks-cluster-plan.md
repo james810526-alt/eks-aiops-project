@@ -65,6 +65,11 @@ Resources:
         SubnetIds: !Ref SubnetIds
         EndpointPublicAccess: false
         EndpointPrivateAccess: true
+      Logging:
+        ClusterLogging:
+          EnabledTypes:
+            - Type: audit
+            - Type: authenticator
       Tags:
         - Key: Name
           Value: !Ref ClusterName

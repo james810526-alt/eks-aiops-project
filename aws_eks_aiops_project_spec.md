@@ -668,6 +668,15 @@ AI 分析原因
 Approve / Reject 連結
 ```
 
+### 18.4 告警去重與冷卻機制 (DynamoDB Cache)
+
+為避免因 Pod 連續崩潰（例如 `CrashLoopBackOff`）導致維運通道在短時間內遭灌爆（告警風暴），我們在 Lambda 的告警發送流程中設計「去重與冷卻機制」：
+
+1. **快照存儲**：使用一張輕量型的 DynamoDB 表（`eks-aiops-demo-alert-cache`），主鍵為 `AlertHash`（結合 Namespace/ResourceName/ErrorType 的雜湊值），內含 `LastSentTime` 屬性。
+2. **冷卻邏輯**：當 Lambda 接收到新告警時，先計算其雜湊值並向 DynamoDB 查詢：
+   - 若在設定的冷卻時間內（例：15 分鐘）已發送過相同告警，則丟棄此次發信（冷卻攔截）。
+   - 若已超過冷卻時間，或為全新告警，則更新/存入 DynamoDB 記錄，並照常觸發 SNS / LINE 發送告警。
+
 ---
 
 ## 19. 人工核准與修復設計
@@ -807,6 +816,7 @@ CodeBuild Role
 ```text
 AWS::EKS::Cluster
 EKS Addons (vpc-cni, kube-proxy, eks-pod-identity-agent)
+EKS Control Plane Logging (audit, authenticator)
 ```
 
 ### 21.5 Node Group Stack
@@ -852,6 +862,7 @@ API Gateway
 CodeBuild
 Bedrock 權限
 S3 診斷報告區
+DynamoDB (告警去重快取表)
 ```
 
 ---
