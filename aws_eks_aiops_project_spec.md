@@ -806,7 +806,7 @@ CodeBuild Role
 
 ```text
 AWS::EKS::Cluster
-EKS Addons optional
+EKS Addons (vpc-cni, kube-proxy, eks-pod-identity-agent)
 ```
 
 ### 21.5 Node Group Stack
@@ -816,6 +816,7 @@ EKS Addons optional
 ```text
 AWS::EKS::Nodegroup
 跨 3 AZ Private App Subnet
+CoreDNS Addon (DependsOn: Nodegroup)
 ```
 
 ### 21.6 Data Stack
