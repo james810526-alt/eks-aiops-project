@@ -99,6 +99,7 @@ Resources:
   # =========================================================================
   RdsDatabase:
     Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
     Properties:
       DBInstanceIdentifier: !Sub "${ProjectName}-rds-db"
       Engine: !Ref DatabaseEngine
@@ -115,6 +116,7 @@ Resources:
       MultiAZ: false # 測試階段不開 Multi-AZ，節省 1/2 資料庫費用
       StorageType: gp3 # 使用高性價比的 gp3 儲存碟
       StorageEncrypted: true # 開啟資料庫儲存加密，採用預設 aws/rds KMS 金鑰 (免費)
+      BackupRetentionPeriod: 7 # 啟用自動備份，保留 7 天快照 (用於支援資料庫還原，不額外收費)
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-rds-db"
