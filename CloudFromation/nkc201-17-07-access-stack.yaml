@@ -60,10 +60,13 @@ Resources:
         Fn::ImportValue: !Sub "${IamStackName}-CodeBuildRoleArn"
       Type: STANDARD
       AccessPolicies:
-        # 2.1 叢集全域管理員：讓 CodeBuild 可以對任意 Namespace 套用修正
-        - PolicyArn: arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy
+        # 2.1 限制在 web-prod 與 aiops 命名空間下擁有管理員 (Admin) 權限，避免對系統核心空間造成衝擊
+        - PolicyArn: arn:aws:eks::aws:cluster-access-policy/AmazonEKSAdminPolicy
           AccessScope:
-            Type: cluster
+            Type: namespace
+            Namespaces:
+              - web-prod
+              - aiops
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-codebuild-access"

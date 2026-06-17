@@ -234,7 +234,7 @@ Resources:
               - Effect: Allow
                 Action:
                   - sns:Publish
-                Resource: 'arn:aws:sns:*:*:*'
+                Resource: !Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${ProjectName}-alerts-topic"
               # 3. 允許讀寫診斷報告至 S3
               - Effect: Allow
                 Action:
@@ -304,6 +304,9 @@ Resources:
             Principal:
               Service: codebuild.amazonaws.com
             Action: sts:AssumeRole
+            Condition:
+              ArnLike:
+                aws:SourceArn: !Sub "arn:aws:codebuild:${AWS::Region}:${AWS::AccountId}:project/${ProjectName}-*"
       Policies:
         - PolicyName: CodeBuildBasePolicy
           PolicyDocument:
@@ -320,7 +323,9 @@ Resources:
                   - s3:GetObject
                   - s3:GetObjectVersion
                   - s3:PutObject
-                Resource: 'arn:aws:s3:::*'
+                Resource:
+                  - !Sub "arn:aws:s3:::${ProjectName}-${AWS::AccountId}-data-bucket"
+                  - !Sub "arn:aws:s3:::${ProjectName}-${AWS::AccountId}-data-bucket/*"
               - Effect: Allow
                 Action:
                   - eks:DescribeCluster
