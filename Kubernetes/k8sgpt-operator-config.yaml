@@ -20,7 +20,7 @@ type: Opaque
 stringData:
   # 請將下面的 <YOUR_API_GATEWAY_ENDPOINT> 替換為 Stack 08 Outputs 的 ApiEndpoint
   # 例如: https://abcde12345.execute-api.ap-south-1.amazonaws.com/webhook
-  url: "https://<YOUR_API_GATEWAY_ENDPOINT>/webhook"
+  url: "https://<YOUR_API_GATEWAY_ENDPOINT>/webhook?token=eks-aiops-webhook-secret-token"
 ---
 apiVersion: core.k8sgpt.ai/v1alpha1
 kind: K8sGPT

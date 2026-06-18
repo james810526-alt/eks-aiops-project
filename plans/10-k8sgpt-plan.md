@@ -1,4 +1,4 @@
-﻿# 10 K8sGPT Stack - 智能診斷與監控資料來源建置計畫
+# 10 K8sGPT Stack - 智能診斷與監控資料來源建置計畫
 
 本計畫紀錄了 EKS 智能維運專題中「K8sGPT 掃描器安裝與監控資料來源（Day 10）」的建置規劃、Helm 安裝步驟以及故障注入驗證流程，方便導入 Obsidian 閱讀與複習。
 
@@ -85,7 +85,7 @@ kubectl apply -f web-prod-app.yaml
 
 ### 步驟 4：設定 K8sGPT 與 Webhook 對接
 1. 查詢您的 API Gateway 網址（可由 Stack 08 輸出取得，如 `https://a1b2c3d4.execute-api.ap-south-1.amazonaws.com`）。
-2. 在跳板機中編輯 `Kubernetes/k8sgpt-operator-config.yaml`，將 `Secret` 內的 `url` 替換為您的 API Gateway 網址後方加上 `/webhook`。
+2. 在跳板機中編輯 `Kubernetes/k8sgpt-operator-config.yaml`，將 `Secret` 內的 `url` 替換為您的 API Gateway 網址後方加上 `/webhook?token=eks-aiops-webhook-secret-token`（必須帶上安全權限 Token 以防範非法惡意調用與費用刷爆）。
 3. 部署 K8sGPT 配置：
 ```bash
 kubectl apply -f k8sgpt-operator-config.yaml
@@ -123,5 +123,6 @@ kubectl patch svc web-demo-service -n web-prod -p '{"spec":{"selector":{"app":"w
 ## 🔒 資安設計防護亮點
 
 1. **Pod Identity 凭證不落地**：K8sGPT Operator 的 Pod 不需要設定 AWS IAM 永久金鑰（如 AccessKey），而是直接借用 ServiceAccount `k8sgpt-sa` 被 AWS 授權的臨時憑證，安全防護力達到 AWS 生產級標準。
-2. **過濾器精確收斂**：在 `k8sgpt-operator-config.yaml` 中，我們限制了掃描器只關注 `Pod`、`Service`、`Ingress` 與 `ReplicaSet`。這能有效過濾掉無關的 K8s 系統內部事件，避免產生不必要的 AWS Bedrock API 呼叫額度浪費。
+2. **過濾器精確收斂**：在 `k8sgpt-operator-config.yaml` 中，我們限制了掃描器只關注 `Pod`、`Service` , `Ingress` 與 `ReplicaSet`。這能有效過濾掉無關的 K8s 系統內部事件，避免產生不必要的 AWS Bedrock API 呼叫額度浪費。
 3. **Webhook 加密保護**：Webhook 的目標 API 網址儲存在 Kubernetes `Secret` 內，在 Pod 中運行時動態載入，防止內部設定檔外流時暴露對外接口端點。
+4. **Webhook 安全權限 Token 驗證**：在對外的 `/webhook` 端點引進密鑰查驗機制（查詢參數須包含 `token=eks-aiops-webhook-secret-token`），Lambda 才會受理並調用 Bedrock，藉此杜絕未授權的虛假告警請求，防範 API 遭騷擾與費用濫用。
