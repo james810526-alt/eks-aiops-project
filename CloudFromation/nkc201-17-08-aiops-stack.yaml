@@ -112,6 +112,7 @@ Resources:
                 Action:
                   - dynamodb:GetItem
                   - dynamodb:PutItem
+                  - dynamodb:UpdateItem
                 Resource: !GetAtt AlertCacheTable.Arn
               # 3.4 允許觸發 CodeBuild 自動修復
               - Effect: Allow
@@ -150,6 +151,8 @@ Resources:
           import boto3
           import hashlib
           import time
+          import uuid
+          import re
 
           dynamodb = boto3.resource('dynamodb')
           sns = boto3.client('sns')
@@ -191,21 +194,38 @@ Resources:
                   current_time = int(time.time())
                   cooling_period = 600
                   expiry_time = current_time + cooling_period
+                  one_time_token = uuid.uuid4().hex
                   
-                  # 檢查 DynamoDB 快取
+                  # 檢查與建立原子鎖 (DynamoDB Atomic Conditional Put)
                   try:
-                      response = table.get_item(Key={'AlertHash': alert_hash})
-                      item = response.get('Item')
-                      if item:
-                          exp = int(item.get('ExpiryTime', 0))
-                          if exp > current_time:
-                              print(f"Alert {alert_hash} throttled. Expiry {exp} > Current {current_time}")
-                              return {
-                                  'statusCode': 200,
-                                  'body': json.dumps({'message': 'Alert throttled (cooling period)', 'hash': alert_hash})
-                              }
+                      table.put_item(
+                          Item={
+                              'AlertHash': alert_hash,
+                              'ExpiryTime': expiry_time,
+                              'Namespace': namespace,
+                              'ResourceName': name,
+                              'ErrorMsg': error_msg,
+                              'OneTimeToken': one_time_token,
+                              'Status': 'ANALYZING',
+                              'CreatedTime': current_time,
+                              'RemediationCommand': 'echo Running Bedrock analysis...'
+                          },
+                          ConditionExpression="attribute_not_exists(AlertHash) OR ExpiryTime < :now",
+                          ExpressionAttributeValues={':now': current_time}
+                      )
+                  except dynamodb.meta.client.exceptions.ConditionalCheckFailedException:
+                      # 已在快取中且尚未過期
+                      print(f"Alert {alert_hash} throttled (already exists and active).")
+                      return {
+                          'statusCode': 200,
+                          'body': json.dumps({'message': 'Alert throttled (cooling period or active analysis)', 'hash': alert_hash})
+                      }
                   except Exception as e:
-                      print("Error checking DynamoDB cache:", str(e))
+                      print("Error locking alert in DynamoDB:", str(e))
+                      return {
+                          'statusCode': 500,
+                          'body': json.dumps({'message': f'DynamoDB lock error: {str(e)}'})
+                      }
                       
                   # 呼叫 Bedrock 來分析錯誤
                   prompt = (
@@ -221,13 +241,18 @@ Resources:
                       f"3. 可能原因\n"
                       f"4. 建議修復方式\n"
                       f"5. 建議修復指令\n\n"
-                      f"IMPORTANT: In the last section, provide a single-line kubectl command that can fix the issue. "
-                      f"You MUST prefix this command line with \"COMMAND: \" (e.g. \"COMMAND: kubectl rollout restart deployment/my-app -n default\" or \"COMMAND: kubectl delete pod my-pod -n default\"). "
-                      f"Do not put any formatting, markdown backticks, or explanation around the command line. Only one command."
+                      f"IMPORTANT: You MUST also provide a structured JSON action block at the very end of your response, prefixed with 'ACTION_JSON: '. "
+                      f"Format it exactly as a single line JSON without markdown code fences or line breaks. "
+                      f"Example: ACTION_JSON: {{\"action\": \"restart_deployment\", \"namespace\": \"{namespace}\", \"resource_name\": \"{name}\"}}\n\n"
+                      f"Allowed values for action are:\n"
+                      f"- \"restart_deployment\": to restart a deployment (resource_name is deployment name)\n"
+                      f"- \"scale_deployment\": to scale a deployment (resource_name is deployment name, you must include a \"replicas\" integer field, e.g. 1)\n"
+                      f"- \"delete_pod\": to delete a failed pod (resource_name is pod name)\n\n"
+                      f"Choose the safest and most specific action to resolve this issue. Do not output raw command strings outside of this JSON structure."
                   )
 
                   diagnosis = "No Bedrock analysis generated."
-                  remediation_command = "echo No command generated"
+                  remediation_command = "echo 'Remediation rejected: Bedrock invocation failed'"
                   
                   try:
                       body_payload = {
@@ -255,16 +280,92 @@ Resources:
                       diagnosis = response_body['content'][0]['text']
                       print("Bedrock response:", diagnosis)
                       
+                      # 解析結構化 action JSON 區塊
+                      action_json_str = None
                       for line in diagnosis.split('\n'):
-                          if line.strip().startswith("COMMAND:"):
-                              remediation_command = line.replace("COMMAND:", "").strip()
-                              remediation_command = remediation_command.strip('`').strip()
+                          if "ACTION_JSON:" in line:
+                              action_json_str = line.split("ACTION_JSON:", 1)[1].strip()
                               break
+                              
+                      if action_json_str:
+                          try:
+                              action_json_str = action_json_str.strip('`').strip()
+                              action_data = json.loads(action_json_str)
+                              
+                              action = action_data.get('action')
+                              action_ns = action_data.get('namespace')
+                              res_name = action_data.get('resource_name')
+                              
+                              # 嚴格白名單與防注入檢驗
+                              valid_namespaces = ['web-prod', 'aiops']
+                              valid_actions = ['restart_deployment', 'scale_deployment', 'delete_pod']
+                              
+                              if action_ns not in valid_namespaces:
+                                  raise ValueError(f"Unauthorized namespace: {action_ns}")
+                                  
+                              if action not in valid_actions:
+                                  raise ValueError(f"Unauthorized action: {action}")
+                                  
+                              if not res_name or not re.match(r'^[a-zA-Z0-9-.]+$', res_name):
+                                  raise ValueError(f"Invalid resource name format: {res_name}")
+                                  
+                              # 檢查是否含有 shell 注入關鍵字元
+                              for val in [str(action), str(action_ns), str(res_name)]:
+                                  if any(c in val for c in [';', '&', '|', '`', '$', '>', '<', '\n', '\r']):
+                                      raise ValueError(f"Dangerous characters detected in field: {val}")
+                                      
+                              # 檢查防注入命令字串
+                              forbidden_keywords = ['delete namespace', 'clusterrolebinding', 'aws iam', 'curl', 'bash', 'sh']
+                              for kw in forbidden_keywords:
+                                  if kw in action_json_str.lower():
+                                      raise ValueError(f"Forbidden command keyword detected: {kw}")
+                                      
+                              # 安全拼裝指令
+                              if action == 'restart_deployment':
+                                  remediation_command = f"kubectl rollout restart deployment/{res_name} -n {action_ns}"
+                              elif action == 'scale_deployment':
+                                  replicas = action_data.get('replicas', 1)
+                                  try:
+                                      replicas_int = int(replicas)
+                                      if not (0 <= replicas_int <= 10):
+                                          raise ValueError("Replicas out of safe range (0-10)")
+                                  except Exception:
+                                      raise ValueError("Invalid replicas parameter")
+                                  remediation_command = f"kubectl scale deployment/{res_name} --replicas={replicas_int} -n {action_ns}"
+                              elif action == 'delete_pod':
+                                  remediation_command = f"kubectl delete pod/{res_name} -n {action_ns}"
+                                  
+                              print(f"Validation succeeded. Generated command: {remediation_command}")
+                              
+                          except Exception as val_err:
+                              print(f"Validation failed: {str(val_err)}")
+                              remediation_command = f"echo 'Remediation rejected: {str(val_err)}'"
+                      else:
+                          print("No ACTION_JSON prefix found in Bedrock response.")
+                          remediation_command = "echo 'Remediation rejected: No structured action JSON found'"
+                          
                   except Exception as e:
                       print("Error invoking Bedrock:", str(e))
                       diagnosis = f"Error calling Bedrock for analysis: {str(e)}\nOriginal Error: {error_msg}"
+                      remediation_command = f"echo 'Remediation rejected: Bedrock invocation failed: {str(e)}'"
                       
-                  # 將修復指令與狀態存入 DynamoDB
+                      # 復原/註記 DynamoDB 狀態為 FAILED
+                      try:
+                          table.update_item(
+                              Key={'AlertHash': alert_hash},
+                              UpdateExpression="set #st = :s, ErrorMsg = :err",
+                              ExpressionAttributeNames={'#st': 'Status'},
+                              ExpressionAttributeValues={':s': 'FAILED', ':err': f"Bedrock invocation failed: {str(e)}"}
+                          )
+                      except Exception as d_err:
+                          print("Failed to update status to FAILED in DynamoDB:", str(d_err))
+                          
+                      return {
+                          'statusCode': 500,
+                          'body': json.dumps({'message': 'Failed to analyze error via Bedrock', 'error': str(e)})
+                      }
+                      
+                  # 將修復指令與狀態更新回 DynamoDB (Status 轉移至 PENDING)
                   try:
                       table.put_item(
                           Item={
@@ -275,7 +376,9 @@ Resources:
                               'ErrorMsg': error_msg,
                               'RemediationCommand': remediation_command,
                               'Status': 'PENDING',
-                              'CreatedTime': current_time
+                              'CreatedTime': current_time,
+                              'OneTimeToken': one_time_token,
+                              'Diagnosis': diagnosis
                           }
                       )
                   except Exception as e:
@@ -287,8 +390,8 @@ Resources:
                   if not domain_name:
                       domain_name = headers.get('host', '')
                       
-                  approve_url = f"https://{domain_name}/approve?hash={alert_hash}"
-                  reject_url = f"https://{domain_name}/reject?hash={alert_hash}"
+                  approve_url = f"https://{domain_name}/approve?hash={alert_hash}&token={one_time_token}"
+                  reject_url = f"https://{domain_name}/reject?hash={alert_hash}&token={one_time_token}"
                   
                   # 發送 SNS 告警郵件
                   email_subject = f"[EKS AIOps Alert] 叢集異常偵測 - {name} ({namespace})"
@@ -325,15 +428,14 @@ Resources:
                   }
                   
               elif path == '/approve':
-                  query_params = event.get('queryStringParameters', {})
-                  if not query_params:
-                      query_params = {}
+                  query_params = event.get('queryStringParameters', {}) or {}
                   alert_hash = query_params.get('hash')
+                  token = query_params.get('token')
                   
-                  if not alert_hash:
+                  if not alert_hash or not token:
                       return {
                           'statusCode': 400,
-                          'body': '<html><body><h1 style="color:red;">Error</h1><p>Missing alert hash.</p></body></html>',
+                          'body': '<html><body><h1 style="color:red;">Error</h1><p>Missing alert hash or token.</p></body></html>',
                           'headers': {'Content-Type': 'text/html; charset=utf-8'}
                       }
                       
@@ -347,13 +449,33 @@ Resources:
                               'headers': {'Content-Type': 'text/html; charset=utf-8'}
                           }
                           
+                      stored_token = item.get('OneTimeToken')
                       status = item.get('Status', 'PENDING')
                       command = item.get('RemediationCommand', '')
                       
+                      # 驗證一次性 Token
+                      if stored_token != token:
+                          return {
+                              'statusCode': 403,
+                              'body': '<html><body><h1 style="color:red;">Forbidden</h1><p>Invalid one-time token.</p></body></html>',
+                              'headers': {'Content-Type': 'text/html; charset=utf-8'}
+                          }
+                          
+                      # 驗證狀態轉移 (必須是 PENDING)
                       if status != 'PENDING':
                           return {
                               'statusCode': 400,
-                              'body': f'<html><body><h1>Action Already Taken</h1><p>This alert has already been resolved. Status: {status}</p></body></html>',
+                              'body': f'<html><body><h1>Action Already Taken</h1><p>This alert has already been resolved or processed. Status: {status}</p></body></html>',
+                              'headers': {'Content-Type': 'text/html; charset=utf-8'}
+                          }
+                          
+                      # 驗證是否過期 (10 分鐘冷卻期)
+                      current_time = int(time.time())
+                      exp = int(item.get('ExpiryTime', 0))
+                      if current_time > exp:
+                          return {
+                              'statusCode': 400,
+                              'body': '<html><body><h1 style="color:red;">Expired</h1><p>This approval link has expired (10 minutes window has passed).</p></body></html>',
                               'headers': {'Content-Type': 'text/html; charset=utf-8'}
                           }
                           
@@ -370,7 +492,7 @@ Resources:
                       )
                       build_id = cb_response.get('build', {}).get('id', 'unknown')
                       
-                      # 更新狀態至 DynamoDB
+                      # 原子更新狀態至 DynamoDB 為 APPROVED
                       table.update_item(
                           Key={'AlertHash': alert_hash},
                           UpdateExpression="set #st = :s, BuildId = :b",
@@ -403,19 +525,47 @@ Resources:
                       }
                       
               elif path == '/reject':
-                  query_params = event.get('queryStringParameters', {})
-                  if not query_params:
-                      query_params = {}
+                  query_params = event.get('queryStringParameters', {}) or {}
                   alert_hash = query_params.get('hash')
+                  token = query_params.get('token')
                   
-                  if not alert_hash:
+                  if not alert_hash or not token:
                       return {
                           'statusCode': 400,
-                          'body': '<html><body><h1 style="color:red;">Error</h1><p>Missing alert hash.</p></body></html>',
+                          'body': '<html><body><h1 style="color:red;">Error</h1><p>Missing alert hash or token.</p></body></html>',
                           'headers': {'Content-Type': 'text/html; charset=utf-8'}
                       }
                       
                   try:
+                      response = table.get_item(Key={'AlertHash': alert_hash})
+                      item = response.get('Item')
+                      if not item:
+                          return {
+                              'statusCode': 404,
+                              'body': '<html><body><h1 style="color:red;">Not Found</h1><p>Alert cache not found or expired.</p></body></html>',
+                              'headers': {'Content-Type': 'text/html; charset=utf-8'}
+                          }
+                          
+                      stored_token = item.get('OneTimeToken')
+                      status = item.get('Status', 'PENDING')
+                      
+                      # 驗證一次性 Token
+                      if stored_token != token:
+                          return {
+                              'statusCode': 403,
+                              'body': '<html><body><h1 style="color:red;">Forbidden</h1><p>Invalid one-time token.</p></body></html>',
+                              'headers': {'Content-Type': 'text/html; charset=utf-8'}
+                          }
+                          
+                      # 驗證狀態轉移 (必須是 PENDING)
+                      if status != 'PENDING':
+                          return {
+                              'statusCode': 400,
+                              'body': f'<html><body><h1>Action Already Taken</h1><p>This alert has already been resolved or processed. Status: {status}</p></body></html>',
+                              'headers': {'Content-Type': 'text/html; charset=utf-8'}
+                          }
+                          
+                      # 更新狀態為 REJECTED
                       table.update_item(
                           Key={'AlertHash': alert_hash},
                           UpdateExpression="set #st = :s",
@@ -479,12 +629,25 @@ Resources:
       RouteKey: "GET /reject"
       Target: !Sub "integrations/${ApiLambdaIntegration}"
 
+  ApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/apigateway/${ProjectName}-api-access-logs"
+      RetentionInDays: 7
+
   ApiStage:
     Type: AWS::ApiGatewayV2::Stage
     Properties:
       ApiId: !Ref AioOpsApi
       StageName: "$default"
       AutoDeploy: true
+      DefaultRouteSettings:
+        DetailedMetricsEnabled: true
+        ThrottlingBurstLimit: 10
+        ThrottlingRateLimit: 5
+      AccessLogSettings:
+        DestinationArn: !GetAtt ApiLogGroup.Arn
+        Format: '{"requestId":"$context.requestId", "ip":"$context.identity.sourceIp", "requestTime":"$context.requestTime", "httpMethod":"$context.httpMethod", "routeKey":"$context.routeKey", "status":"$context.status", "protocol":"$context.protocol", "responseLength":"$context.responseLength"}'
 
   LambdaPermissionForApi:
     Type: AWS::Lambda::Permission
@@ -529,8 +692,10 @@ Resources:
           phases:
             install:
               commands:
-                - echo "Installing kubectl..."
-                - curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+                - echo "Installing kubectl v1.34.0..."
+                - curl -LO "https://dl.k8s.io/release/v1.34.0/bin/linux/amd64/kubectl"
+                - curl -LO "https://dl.k8s.io/release/v1.34.0/bin/linux/amd64/kubectl.sha256"
+                - echo "$(cat kubectl.sha256)  kubectl" | sha256sum -c -
                 - chmod +x kubectl
                 - mv kubectl /usr/local/bin/
             pre_build:
@@ -539,8 +704,77 @@ Resources:
                 - aws eks update-kubeconfig --region $AWS_DEFAULT_REGION --name $CLUSTER_NAME
             build:
               commands:
-                - echo "Applying remediation command..."
-                - eval "$REM_COMMAND"
+                - echo "Applying remediation command safely..."
+                - $REM_COMMAND
+
+  # =========================================================================
+  # 7. VPC Endpoints (AWS PrivateLink 內網維運連線)
+  # =========================================================================
+  BedrockEndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security Group for Bedrock Runtime VPC Endpoint
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+
+  BedrockRuntimeEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VpcId
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.bedrock-runtime"
+      VpcEndpointType: Interface
+      SubnetIds: !Ref PrivateSubnetIds
+      SecurityGroupIds:
+        - !Ref BedrockEndpointSecurityGroup
+      PrivateDnsEnabled: true
+
+  StsEndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security Group for STS VPC Endpoint
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+
+  StsEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VpcId
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.sts"
+      VpcEndpointType: Interface
+      SubnetIds: !Ref PrivateSubnetIds
+      SecurityGroupIds:
+        - !Ref StsEndpointSecurityGroup
+      PrivateDnsEnabled: true
+
+  LogsEndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security Group for CloudWatch Logs VPC Endpoint
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+
+  LogsEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VpcId
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.logs"
+      VpcEndpointType: Interface
+      SubnetIds: !Ref PrivateSubnetIds
+      SecurityGroupIds:
+        - !Ref LogsEndpointSecurityGroup
+      PrivateDnsEnabled: true
 
 # =========================================================================
 # Outputs
