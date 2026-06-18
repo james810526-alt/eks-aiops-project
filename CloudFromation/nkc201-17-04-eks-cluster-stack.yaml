@@ -14,7 +14,7 @@ Parameters:
 
   KubernetesVersion:
     Type: String
-    Default: '1.30'
+    Default: '1.34'
     Description: Kubernetes Version of the EKS cluster
 
   EksClusterRoleArn:

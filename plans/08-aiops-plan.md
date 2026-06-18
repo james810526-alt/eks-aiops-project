@@ -88,21 +88,34 @@ sequenceDiagram
 
 ### 1. 執行 CloudFormation 部署
 
-請在您的專題資料夾下開啟 **PowerShell** 執行以下指令進行部署：
+請在您的專題資料夾下開啟 **WSL (Bash)** 執行以下指令進行部署：
 
-```powershell
+```bash
 # 1. 鎖定登入 Profile
-$env:AWS_PROFILE="nkc201-17-sso"
+export AWS_PROFILE="nkc201-17-sso"
 
-# 2. 部署 AIOps Stack (Stack 08)
-aws cloudformation deploy `
-  --template-file CloudFromation/nkc201-17-08-aiops-stack.yaml `
-  --stack-name nkc201-17-08-aiops-stack `
-  --parameter-overrides `
-      VpcId=$(aws cloudformation describe-stacks --stack-name nkc201-17-01-network-stack --query "Stacks[0].Outputs[?OutputKey=='VpcId'].OutputValue" --output text) `
-      PrivateSubnetIds=$(aws cloudformation describe-stacks --stack-name nkc201-17-01-network-stack --query "Stacks[0].Outputs[?OutputKey=='PrivateSubnets'].OutputValue" --output text) `
-      EngineerEmail="james810526@gmail.com" `
-  --capabilities CAPABILITY_NAMED_IAM `
+# 2. 獲取 VPC ID (從 Stack 01 輸出查詢)
+VPC_ID=$(aws cloudformation describe-stacks \
+  --stack-name nkc201-17-01-network-stack \
+  --query "Stacks[0].Outputs[?OutputKey=='VpcId'].OutputValue" \
+  --output text \
+  --region ap-south-1)
+
+# 3. 獲取 3 個 Private App Subnet ID 並以逗號連接 (正確查詢 PrivateAppSubnetAId/BId/CId)
+SUBNET_A=$(aws cloudformation describe-stacks --stack-name nkc201-17-01-network-stack --query "Stacks[0].Outputs[?OutputKey=='PrivateAppSubnetAId'].OutputValue" --output text --region ap-south-1)
+SUBNET_B=$(aws cloudformation describe-stacks --stack-name nkc201-17-01-network-stack --query "Stacks[0].Outputs[?OutputKey=='PrivateAppSubnetBId'].OutputValue" --output text --region ap-south-1)
+SUBNET_C=$(aws cloudformation describe-stacks --stack-name nkc201-17-01-network-stack --query "Stacks[0].Outputs[?OutputKey=='PrivateAppSubnetCId'].OutputValue" --output text --region ap-south-1)
+PRIVATE_SUBNETS="${SUBNET_A},${SUBNET_B},${SUBNET_C}"
+
+# 4. 部署 AIOps Stack (Stack 08)
+aws cloudformation deploy \
+  --template-file CloudFromation/nkc201-17-08-aiops-stack.yaml \
+  --stack-name nkc201-17-08-aiops-stack \
+  --parameter-overrides \
+      VpcId="$VPC_ID" \
+      PrivateSubnetIds="$PRIVATE_SUBNETS" \
+      EngineerEmail="james810526@gmail.com" \
+  --capabilities CAPABILITY_NAMED_IAM \
   --region ap-south-1
 ```
 
@@ -118,13 +131,17 @@ aws cloudformation deploy `
 
 #### 🧪 測試 Webhook 與 AI 診斷
 您可以透過跳板機或本機使用 `curl` 模擬 K8sGPT 發送錯誤：
-```powershell
+```bash
 # 1. 獲取 API Gateway 網址
-$ApiUrl = aws cloudformation describe-stacks --stack-name nkc201-17-08-aiops-stack --query "Stacks[0].Outputs[?OutputKey=='ApiEndpoint'].OutputValue" --output text
+API_URL=$(aws cloudformation describe-stacks \
+  --stack-name nkc201-17-08-aiops-stack \
+  --query "Stacks[0].Outputs[?OutputKey=='ApiEndpoint'].OutputValue" \
+  --output text \
+  --region ap-south-1)
 
 # 2. 發送模擬 Pod 異常 (ImagePullBackOff) 到 Webhook
-curl -X POST "$ApiUrl/webhook" `
-  -H "Content-Type: application/json" `
+curl -X POST "${API_URL}/webhook" \
+  -H "Content-Type: application/json" \
   -d '{"name": "nginx-web", "namespace": "web-prod", "error": "ImagePullBackOff: Failed to pull image nginx:1.999"}'
 ```
 

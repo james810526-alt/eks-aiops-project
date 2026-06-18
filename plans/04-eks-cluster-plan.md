@@ -38,7 +38,7 @@ Parameters:
 
   KubernetesVersion:
     Type: String
-    Default: '1.30'
+    Default: '1.34'
     Description: Kubernetes Version of the EKS cluster
 
   EksClusterRoleArn:
@@ -127,14 +127,28 @@ Outputs:
 
 ## 💻 部署指令參考
 
-在 Windows 中部署此 Cluster Stack：
-```powershell
-aws cloudformation create-stack `
-  --stack-name eks-aiops-cluster `
-  --template-body file://CloudFromation/nkc201-17-04-eks-cluster-stack.yaml `
-  --parameters `
-    ParameterKey=EksClusterRoleArn,ParameterValue=arn:aws:iam::您的帳號:role/eks-aiops-demo-eks-cluster-role `
-    ParameterKey=SecurityGroupIds,ParameterValue=sg-您的安全群組ID `
-    ParameterKey=SubnetIds,ParameterValue=subnet-A區ID`,subnet-B區ID`,subnet-C區ID`
+請在 **WSL (Bash)** 中執行以下指令：
+
+```bash
+aws cloudformation create-stack \
+  --stack-name eks-aiops-cluster \
+  --template-body file://CloudFromation/nkc201-17-04-eks-cluster-stack.yaml \
+  --parameters \
+    ParameterKey=EksClusterRoleArn,ParameterValue=arn:aws:iam::您的帳號:role/eks-aiops-demo-eks-cluster-role \
+    ParameterKey=SecurityGroupIds,ParameterValue=sg-您的安全群組ID \
+    ParameterKey=SubnetIds,ParameterValue=subnet-A區ID,subnet-B區ID,subnet-C區ID
 ```
-*(注意：多個子網路 ID 請使用半形逗號 `,` 分隔)*
+*(注意：多個子網路 ID 請使用半形逗號 `,` 分隔，在 Bash 中不需加反引號逃逸)*
+
+> [!TIP]
+> **Windows PowerShell 備用指令**
+> 若要在 Windows PowerShell 中執行，可使用以下格式：
+> ```powershell
+> aws cloudformation create-stack `
+>   --stack-name eks-aiops-cluster `
+>   --template-body file://CloudFromation/nkc201-17-04-eks-cluster-stack.yaml `
+>   --parameters `
+>     ParameterKey=EksClusterRoleArn,ParameterValue=arn:aws:iam::您的帳號:role/eks-aiops-demo-eks-cluster-role `
+>     ParameterKey=SecurityGroupIds,ParameterValue=sg-您的安全群組ID `
+>     ParameterKey=SubnetIds=subnet-A區ID`,subnet-B區ID`,subnet-C區ID
+> ```

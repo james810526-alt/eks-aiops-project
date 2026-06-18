@@ -203,22 +203,34 @@ Outputs:
       Name: !Sub "${AWS::StackName}-RdsSecurityGroupId"
 ```
 
----
-
 ## 💻 部署指令參考
 
-在 Windows 中，您可以使用 AWS CLI 來建立本 Security Stack。
+請在 **WSL (Bash)** 中執行以下指令：
 
 ### 1. 查詢已建立的 VPC ID
-```powershell
+```bash
 aws ec2 describe-vpcs --query "Vpcs[*].{ID:VpcId,Name:Tags[?Key=='Name'].Value | [0]}" --output table
 ```
 
 ### 2. 執行建立 Stack 指令
 將查到的 VPC ID（例如 `vpc-xxxxxx`）填入下方：
-```powershell
-aws cloudformation create-stack `
-  --stack-name eks-aiops-security `
-  --template-body file://CloudFromation/nkc201-17-02-security-stack.yaml `
+```bash
+aws cloudformation create-stack \
+  --stack-name eks-aiops-security \
+  --template-body file://CloudFromation/nkc201-17-02-security-stack.yaml \
   --parameters ParameterKey=VpcId,ParameterValue=vpc-xxxxxx
 ```
+
+> [!TIP]
+> **Windows PowerShell 備用指令**
+> 若要在 Windows PowerShell 中執行，可使用以下格式：
+> ```powershell
+> # 1. 查詢 VPC ID
+> aws ec2 describe-vpcs --query "Vpcs[*].{ID:VpcId,Name:Tags[?Key=='Name'].Value | [0]}" --output table
+> 
+> # 2. 建立 Stack
+> aws cloudformation create-stack `
+>   --stack-name eks-aiops-security `
+>   --template-body file://CloudFromation/nkc201-17-02-security-stack.yaml `
+>   --parameters ParameterKey=VpcId,ParameterValue=vpc-xxxxxx
+> ```

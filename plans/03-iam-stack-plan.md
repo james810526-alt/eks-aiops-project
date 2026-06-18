@@ -410,12 +410,23 @@ Outputs:
 
 ## 💻 部署指令參考
 
-在 Windows 中，您可以使用 AWS CLI 來部署此 IAM Stack：
+請在 **WSL (Bash)** 中執行以下指令：
 
-```powershell
-aws cloudformation create-stack `
-  --stack-name eks-aiops-iam `
-  --template-body file://CloudFromation/nkc201-17-03-iam-stack.yaml `
+```bash
+aws cloudformation create-stack \
+  --stack-name eks-aiops-iam \
+  --template-body file://CloudFromation/nkc201-17-03-iam-stack.yaml \
   --capabilities CAPABILITY_NAMED_IAM
 ```
+
+> [!TIP]
+> **Windows PowerShell 備用指令**
+> 若要在 Windows PowerShell 中執行，可使用以下格式：
+> ```powershell
+> aws cloudformation create-stack `
+>   --stack-name eks-aiops-iam `
+>   --template-body file://CloudFromation/nkc201-17-03-iam-stack.yaml `
+>   --capabilities CAPABILITY_NAMED_IAM
+> ```
+
 * **注意：** 由於此範本會建立自訂名稱的 IAM 角色，您必須加入 `--capabilities CAPABILITY_NAMED_IAM` 參數授權 AWS 建立這類特殊權限資源，否則會發生 `RequiresCapabilities` 報錯。

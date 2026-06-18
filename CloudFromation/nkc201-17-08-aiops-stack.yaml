@@ -35,6 +35,11 @@ Parameters:
     Default: james810526@gmail.com
     Description: Email address for engineer alerts
 
+  BedrockModelId:
+    Type: String
+    Default: anthropic.claude-3-haiku-20240307-v1:0
+    Description: Bedrock Model ID to use for diagnostics
+
 Resources:
   # =========================================================================
   # 1. Amazon SNS 告警主題 (警報廣播器)
@@ -133,6 +138,7 @@ Resources:
           CLUSTER_NAME:
             Fn::ImportValue: !Sub "${ClusterStackName}-ClusterName"
           CODEBUILD_PROJECT: !Ref RemediationProject
+          BEDROCK_MODEL_ID: !Ref BedrockModelId
       VpcConfig:
         SubnetIds: !Ref PrivateSubnetIds
         SecurityGroupIds:
@@ -142,39 +148,293 @@ Resources:
           import json
           import os
           import boto3
+          import hashlib
+          import time
+
+          dynamodb = boto3.resource('dynamodb')
+          sns = boto3.client('sns')
+          bedrock = boto3.client('bedrock-runtime', region_name='ap-south-1')
+          codebuild = boto3.client('codebuild')
 
           def handler(event, context):
               print("Received event:", json.dumps(event))
               path = event.get('rawPath', '')
               
+              table_name = os.environ.get('DYNAMODB_TABLE')
+              sns_topic_arn = os.environ.get('SNS_TOPIC_ARN')
+              codebuild_project = os.environ.get('CODEBUILD_PROJECT')
+              model_id = os.environ.get('BEDROCK_MODEL_ID', 'anthropic.claude-3-haiku-20240307-v1:0')
+              
+              table = dynamodb.Table(table_name)
+              
               if path == '/webhook':
-                  # 處理來自 K8sGPT 的 Webhook 告警
                   body_str = event.get('body', '{}')
                   try:
                       body = json.loads(body_str)
                   except Exception:
                       body = {}
+                      
+                  name = body.get('name', 'unknown-resource')
+                  namespace = body.get('namespace', 'default')
+                  error_msg = body.get('error', '')
+                  
+                  if not error_msg:
+                      return {
+                          'statusCode': 400,
+                          'body': json.dumps({'message': 'Missing error field'})
+                      }
+                      
+                  # 計算 AlertHash 作為告警去重的依據
+                  hash_src = f"{namespace}:{name}:{error_msg}"
+                  alert_hash = hashlib.sha256(hash_src.encode('utf-8')).hexdigest()
+                  
+                  current_time = int(time.time())
+                  cooling_period = 600
+                  expiry_time = current_time + cooling_period
+                  
+                  # 檢查 DynamoDB 快取
+                  try:
+                      response = table.get_item(Key={'AlertHash': alert_hash})
+                      item = response.get('Item')
+                      if item:
+                          exp = int(item.get('ExpiryTime', 0))
+                          if exp > current_time:
+                              print(f"Alert {alert_hash} throttled. Expiry {exp} > Current {current_time}")
+                              return {
+                                  'statusCode': 200,
+                                  'body': json.dumps({'message': 'Alert throttled (cooling period)', 'hash': alert_hash})
+                              }
+                  except Exception as e:
+                      print("Error checking DynamoDB cache:", str(e))
+                      
+                  # 呼叫 Bedrock 來分析錯誤
+                  prompt = (
+                      f"You are a professional AWS EKS Kubernetes operations expert.\n"
+                      f"We detected an error in our cluster:\n"
+                      f"Resource Name: {name}\n"
+                      f"Namespace: {namespace}\n"
+                      f"Error Message: {error_msg}\n\n"
+                      f"Please provide a diagnostic report in Traditional Chinese (繁體中文).\n"
+                      f"Include the following sections:\n"
+                      f"1. 問題摘要\n"
+                      f"2. 影響範圍\n"
+                      f"3. 可能原因\n"
+                      f"4. 建議修復方式\n"
+                      f"5. 建議修復指令\n\n"
+                      f"IMPORTANT: In the last section, provide a single-line kubectl command that can fix the issue. "
+                      f"You MUST prefix this command line with \"COMMAND: \" (e.g. \"COMMAND: kubectl rollout restart deployment/my-app -n default\" or \"COMMAND: kubectl delete pod my-pod -n default\"). "
+                      f"Do not put any formatting, markdown backticks, or explanation around the command line. Only one command."
+                  )
+
+                  diagnosis = "No Bedrock analysis generated."
+                  remediation_command = "echo No command generated"
+                  
+                  try:
+                      body_payload = {
+                          "anthropic_version": "bedrock-2023-05-31",
+                          "max_tokens": 1000,
+                          "messages": [
+                              {
+                                  "role": "user",
+                                  "content": [
+                                      {
+                                          "type": "text",
+                                          "text": prompt
+                                      }
+                                  ]
+                              }
+                          ]
+                      }
+                      
+                      response = bedrock.invoke_model(
+                          modelId=model_id,
+                          body=json.dumps(body_payload)
+                      )
+                      
+                      response_body = json.loads(response.get('body').read())
+                      diagnosis = response_body['content'][0]['text']
+                      print("Bedrock response:", diagnosis)
+                      
+                      for line in diagnosis.split('\n'):
+                          if line.strip().startswith("COMMAND:"):
+                              remediation_command = line.replace("COMMAND:", "").strip()
+                              remediation_command = remediation_command.strip('`').strip()
+                              break
+                  except Exception as e:
+                      print("Error invoking Bedrock:", str(e))
+                      diagnosis = f"Error calling Bedrock for analysis: {str(e)}\nOriginal Error: {error_msg}"
+                      
+                  # 將修復指令與狀態存入 DynamoDB
+                  try:
+                      table.put_item(
+                          Item={
+                              'AlertHash': alert_hash,
+                              'ExpiryTime': expiry_time,
+                              'Namespace': namespace,
+                              'ResourceName': name,
+                              'ErrorMsg': error_msg,
+                              'RemediationCommand': remediation_command,
+                              'Status': 'PENDING',
+                              'CreatedTime': current_time
+                          }
+                      )
+                  except Exception as e:
+                      print("Error writing to DynamoDB:", str(e))
+                      
+                  # 取得 domain 以生成 approve/reject 連結
+                  headers = event.get('headers', {})
+                  domain_name = event.get('requestContext', {}).get('domainName', '')
+                  if not domain_name:
+                      domain_name = headers.get('host', '')
+                      
+                  approve_url = f"https://{domain_name}/approve?hash={alert_hash}"
+                  reject_url = f"https://{domain_name}/reject?hash={alert_hash}"
+                  
+                  # 發送 SNS 告警郵件
+                  email_subject = f"[EKS AIOps Alert] 叢集異常偵測 - {name} ({namespace})"
+                  email_body = (
+                      f"【EKS 智能維運告警通知】\n\n"
+                      f"我們偵測到 EKS 叢集中發生異常！\n\n"
+                      f"● 異常資源: {name} (Namespace: {namespace})\n"
+                      f"● 原始錯誤: {error_msg}\n\n"
+                      f"=========================================\n"
+                      f"🧠 AI 專家診斷報告與修復建議:\n"
+                      f"=========================================\n"
+                      f"{diagnosis}\n\n"
+                      f"=========================================\n"
+                      f"🛠️ 自動修復審查 (請點選以下連結):\n"
+                      f"=========================================\n"
+                      f"👉 【同意執行自動修復】:\n"
+                      f"{approve_url}\n\n"
+                      f"👉 【拒絕執行自動修復】:\n"
+                      f"{reject_url}\n\n"
+                      f"※ 提示：此修復建議由 Amazon Bedrock AI 自動生成，並將於安全 VPC 內網的 CodeBuild 環境中以 kubectl 執行。"
+                  )
+                  try:
+                      sns.publish(
+                          TopicArn=sns_topic_arn,
+                          Subject=email_subject,
+                          Message=email_body
+                      )
+                  except Exception as e:
+                      print("Error publishing to SNS:", str(e))
+                      
                   return {
                       'statusCode': 200,
-                      'body': json.dumps({'message': 'Webhook received successfully', 'data': body})
+                      'body': json.dumps({'message': 'Webhook parsed, AI analysis sent', 'hash': alert_hash, 'command': remediation_command})
                   }
                   
               elif path == '/approve':
-                  # 工程師點擊核准修復
-                  return {
-                      'statusCode': 200,
-                      'body': '<html><body><h1 style="color:green;">Remediation Approved</h1><p>Triggering automatic fix via CodeBuild...</p></body></html>',
-                      'headers': {'Content-Type': 'text/html; charset=utf-8'}
-                  }
+                  query_params = event.get('queryStringParameters', {})
+                  if not query_params:
+                      query_params = {}
+                  alert_hash = query_params.get('hash')
                   
+                  if not alert_hash:
+                      return {
+                          'statusCode': 400,
+                          'body': '<html><body><h1 style="color:red;">Error</h1><p>Missing alert hash.</p></body></html>',
+                          'headers': {'Content-Type': 'text/html; charset=utf-8'}
+                      }
+                      
+                  try:
+                      response = table.get_item(Key={'AlertHash': alert_hash})
+                      item = response.get('Item')
+                      if not item:
+                          return {
+                              'statusCode': 404,
+                              'body': '<html><body><h1 style="color:red;">Not Found</h1><p>Alert cache not found or expired.</p></body></html>',
+                              'headers': {'Content-Type': 'text/html; charset=utf-8'}
+                          }
+                          
+                      status = item.get('Status', 'PENDING')
+                      command = item.get('RemediationCommand', '')
+                      
+                      if status != 'PENDING':
+                          return {
+                              'statusCode': 400,
+                              'body': f'<html><body><h1>Action Already Taken</h1><p>This alert has already been resolved. Status: {status}</p></body></html>',
+                              'headers': {'Content-Type': 'text/html; charset=utf-8'}
+                          }
+                          
+                      # 觸發 CodeBuild 自動修復
+                      cb_response = codebuild.start_build(
+                          projectName=codebuild_project,
+                          environmentVariablesOverride=[
+                              {
+                                  'name': 'REM_COMMAND',
+                                  'value': command,
+                                  'type': 'PLAINTEXT'
+                              }
+                          ]
+                      )
+                      build_id = cb_response.get('build', {}).get('id', 'unknown')
+                      
+                      # 更新狀態至 DynamoDB
+                      table.update_item(
+                          Key={'AlertHash': alert_hash},
+                          UpdateExpression="set #st = :s, BuildId = :b",
+                          ExpressionAttributeNames={'#st': 'Status'},
+                          ExpressionAttributeValues={':s': 'APPROVED', ':b': build_id}
+                      )
+                      
+                      # 發送啟動成功 SNS 通知
+                      try:
+                          sns.publish(
+                              TopicArn=sns_topic_arn,
+                              Subject=f"[EKS AIOps] 自動修復已啟動 - {item.get('ResourceName')}",
+                              Message=f"工程師已核准自動修復！\n\n執行指令：{command}\nCodeBuild Build ID: {build_id}\n正在 VPC 內網套用修復，請稍候..."
+                          )
+                      except Exception as sns_err:
+                          print("Error sending approve SNS:", str(sns_err))
+                      
+                      return {
+                          'statusCode': 200,
+                          'body': f'<html><body><h1 style="color:green;">Remediation Approved</h1><p>Command: <code>{command}</code></p><p>CodeBuild triggered successfully! Build ID: {build_id}</p></body></html>',
+                          'headers': {'Content-Type': 'text/html; charset=utf-8'}
+                      }
+                      
+                  except Exception as e:
+                      print("Error in approve route:", str(e))
+                      return {
+                          'statusCode': 500,
+                          'body': f'<html><body><h1 style="color:red;">Internal Error</h1><p>{str(e)}</p></body></html>',
+                          'headers': {'Content-Type': 'text/html; charset=utf-8'}
+                      }
+                      
               elif path == '/reject':
-                  # 工程師點擊拒絕修復
-                  return {
-                      'statusCode': 200,
-                      'body': '<html><body><h1 style="color:red;">Remediation Rejected</h1><p>Remediation canceled by engineer.</p></body></html>',
-                      'headers': {'Content-Type': 'text/html; charset=utf-8'}
-                  }
+                  query_params = event.get('queryStringParameters', {})
+                  if not query_params:
+                      query_params = {}
+                  alert_hash = query_params.get('hash')
                   
+                  if not alert_hash:
+                      return {
+                          'statusCode': 400,
+                          'body': '<html><body><h1 style="color:red;">Error</h1><p>Missing alert hash.</p></body></html>',
+                          'headers': {'Content-Type': 'text/html; charset=utf-8'}
+                      }
+                      
+                  try:
+                      table.update_item(
+                          Key={'AlertHash': alert_hash},
+                          UpdateExpression="set #st = :s",
+                          ExpressionAttributeNames={'#st': 'Status'},
+                          ExpressionAttributeValues={':s': 'REJECTED'}
+                      )
+                      return {
+                          'statusCode': 200,
+                          'body': '<html><body><h1 style="color:red;">Remediation Rejected</h1><p>Remediation canceled by engineer.</p></body></html>',
+                          'headers': {'Content-Type': 'text/html; charset=utf-8'}
+                      }
+                  except Exception as e:
+                      print("Error in reject route:", str(e))
+                      return {
+                          'statusCode': 500,
+                          'body': f'<html><body><h1 style="color:red;">Internal Error</h1><p>{str(e)}</p></body></html>',
+                          'headers': {'Content-Type': 'text/html; charset=utf-8'}
+                      }
+                      
               return {
                   'statusCode': 404,
                   'body': 'Not Found'

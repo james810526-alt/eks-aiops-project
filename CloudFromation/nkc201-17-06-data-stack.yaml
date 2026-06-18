@@ -78,7 +78,7 @@ Resources:
         SecretStringTemplate: '{"username": "admin"}'
         GenerateStringKey: password
         PasswordLength: 16
-        ExcludeCharacters: '"@/\' ' # 排除可能會破壞資料庫語法的特殊符號
+        ExcludeCharacters: "\"@/\\' " # 排除可能會破壞資料庫語法的特殊符號
 
   # =========================================================================
   # 3. RDS DB Subnet Group (資料庫專用網段群組)

@@ -122,7 +122,45 @@ Resources:
       ResolveConflicts: OVERWRITE
 
   # =========================================================================
-  # 3. SSM Bastion Host (安全跳板機：無公網 IP、無開放 SSH、採用 SSM 登入，負責私有管理 EKS)
+  # 3. SSM Bastion Host IAM Role & Instance Profile (跳板機專用 IAM 角色與設定檔)
+  # =========================================================================
+  BastionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-bastion-role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: AllowAssumeEngineerRole
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: sts:AssumeRole
+                Resource:
+                  Fn::ImportValue: !Sub "${IamStackName}-EngineerRoleArn"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-bastion-role"
+        - Key: Project
+          Value: nkc201-17
+
+  BastionInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub "${ProjectName}-bastion-instance-profile"
+      Roles:
+        - !Ref BastionRole
+
+  # =========================================================================
+  # 4. SSM Bastion Host (安全跳板機：無公網 IP、無開放 SSH、採用 SSM 登入，負責私有管理 EKS)
   # =========================================================================
   BastionHost:
     Type: AWS::EC2::Instance
@@ -131,9 +169,8 @@ Resources:
       SubnetId: !Select [0, !Ref SubnetIds] # 部署於第一個 App 私有子網路中
       SecurityGroupIds:
         - Fn::ImportValue: !Sub "${SecurityStackName}-EksNodeSecurityGroupId" # 使用與 Node 相同的安全群組以直接連線 API Server
-      IamInstanceProfile:
-        Fn::ImportValue: !Sub "${IamStackName}-EksNodeInstanceProfileName" # 復用擁有 SSM 與 EKS 管理權限的 Instance Profile
-      ImageId: resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-x86_64 # 使用最新 AL2023 系統
+      IamInstanceProfile: !Ref BastionInstanceProfile
+      ImageId: "{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-x86_64}}" # 使用最新 AL2023 系統
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-bastion"
@@ -167,18 +204,35 @@ Outputs:
 
 ## 💻 部署指令參考
 
-請在您的專題資料夾下開啟 **PowerShell** 執行以下指令進行部署（採用 UTF-8 讀檔避開編碼錯誤）：
+請在 **WSL (Bash)** 中執行以下指令：
 
-```powershell
+```bash
 # 1. 先鎖定登入 Profile
-$env:AWS_PROFILE="nkc201-17-sso"
+export AWS_PROFILE="nkc201-17-sso"
 
-# 2. 執行部署指令 (請將 <...> 替換成先前步驟產生的實際 ARN 與 ID)
-aws cloudformation create-stack `
-  --stack-name nkc201-17-nodegroup `
-  --template-body (Get-Content CloudFromation/nkc201-17-05-nodegroup-stack.yaml -Raw -Encoding UTF8) `
-  --parameters `
-    ParameterKey=ClusterName,ParameterValue=eks-aiops-mumbai `
-    ParameterKey=NodeRoleArn,ParameterValue=<您的EksNodeRoleArn> `
+# 2. 執行部署指令
+aws cloudformation create-stack \
+  --stack-name nkc201-17-nodegroup \
+  --template-body file://CloudFromation/nkc201-17-05-nodegroup-stack.yaml \
+  --parameters \
+    ParameterKey=ClusterName,ParameterValue=eks-aiops-mumbai \
+    ParameterKey=NodeRoleArn,ParameterValue=<您的EksNodeRoleArn> \
     ParameterKey=SubnetIds,ParameterValue=<您的3個PrivateAppSubnetID，以逗號分隔>
 ```
+
+> [!TIP]
+> **Windows PowerShell 備用指令**
+> 若要在 Windows PowerShell 中執行，可使用以下格式：
+> ```powershell
+> # 1. 先鎖定登入 Profile
+> $env:AWS_PROFILE="nkc201-17-sso"
+> 
+> # 2. 執行部署指令
+> aws cloudformation create-stack `
+>   --stack-name nkc201-17-nodegroup `
+>   --template-body (Get-Content CloudFromation/nkc201-17-05-nodegroup-stack.yaml -Raw -Encoding UTF8) `
+>   --parameters `
+>     ParameterKey=ClusterName,ParameterValue=eks-aiops-mumbai `
+>     ParameterKey=NodeRoleArn,ParameterValue=<您的EksNodeRoleArn> `
+>     ParameterKey=SubnetIds,ParameterValue=<您的3個PrivateAppSubnetID，以逗號分隔>
+> ```

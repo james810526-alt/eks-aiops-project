@@ -1,4 +1,4 @@
-# 04 EKS Cluster - 本地連線操作指南
+﻿# 04 EKS Cluster - 本地連線操作指南
 
 本指南將指導您如何在 Windows 本地電腦上安裝必備工具（`kubectl`、`AWS CLI`），並配置它們以連線並遙控遠端在 AWS 孟買的 EKS 叢集。
 
@@ -27,7 +27,7 @@ winget install Kubernetes.kubectl
 > ```powershell
 > kubectl version --client
 > ```
-> 如果畫面有出現 Client Version 資訊（如 v1.30.x），代表安裝完成！
+> 如果畫面有出現 Client Version 資訊（如 v1.34.x），代表安裝完成！
 
 ---
 
@@ -82,10 +82,16 @@ aws sso login --profile james-dev
   aws ec2 describe-vpcs --profile james-dev
   ```
 * **懶人免打 Profile 小技巧：**
-  如果覺得每次都要加上 `--profile` 太麻煩，可以在當前 PowerShell 視窗先執行一次這行環境變數設定：
-  ```powershell
-  $env:AWS_PROFILE="james-dev"
+  如果覺得每次都要加上 `--profile` 太麻煩，可以在當前 WSL (Bash) 視窗先執行一次這行環境變數設定：
+  ```bash
+  export AWS_PROFILE="james-dev"
   ```
+
+  > [!TIP]
+  > **Windows PowerShell 備用指令**
+  > ```powershell
+  > $env:AWS_PROFILE="james-dev"
+  > ```
   執行後，該視窗內後續所有的 AWS 指令（包含 `aws eks update-kubeconfig` 等）都會預設直接以該 Profile 執行，不需再手動打 `--profile`。
 
 ---
@@ -100,11 +106,18 @@ aws sso login --profile james-dev
 在本地電腦的 PowerShell 中，執行以下指令登入跳板機 (請將 `<BastionInstanceId>` 替換為 Stack 05 Outputs 輸出的 `BastionInstanceId`，例如 `i-xxxxxxxxxxxx`)：
 
 ```powershell
-# 1. 確保已載入 AWS Profile 憑證
-$env:AWS_PROFILE="nkc201-17-sso"
+# 1. 確保已載入 AWS Profile 憑證 (WSL Bash)
+export AWS_PROFILE="nkc201-17-sso"
 
 # 2. 啟動 SSM Session 登入跳板機
 aws ssm start-session --target <BastionInstanceId>
+
+> [!TIP]
+> **Windows PowerShell 備用指令**
+> ```powershell
+> $env:AWS_PROFILE="nkc201-17-sso"
+> aws ssm start-session --target <BastionInstanceId>
+> ```
 ```
 *登入成功後，您會進入 Linux 的 shell 畫面（例如 `sh-5.2$` 或 `[ssm-user@ip-...]`）。*
 
@@ -149,31 +162,58 @@ kubectl get pods -A
 
 - **為什麼會這樣：** Windows 系統底層預設使用舊式 ANSI (CP950) 編碼，而我們的 YAML 檔案是用 UTF-8 儲存中文。當 AWS CLI 內部試圖解析 `file://` 時，會因為編碼衝突而失敗；若改用 `fileb://` 則會因為 AWS 限制 `--template-body` 只能接受「純文字字串」而報錯類型不符。
 - **黃金解決方案：** 
-  利用 PowerShell 的原生指令 `(Get-Content -Raw -Encoding UTF8)` 預先讀取檔案成 UTF-8 文字，再直接塞給 AWS CLI。
+  在 WSL (Bash) 環境中，由於系統預設使用 UTF-8，可以直接使用 `-f` 或 `file://` 解析，不需要特殊的讀檔處理：
   
-  **範例 A：部署 02 Security Stack**
-  ```powershell
-  aws cloudformation create-stack `
-    --stack-name nkc201-17-security `
-    --template-body (Get-Content CloudFromation/nkc201-17-02-security-stack.yaml -Raw -Encoding UTF8) `
+  **範例 A：部署 02 Security Stack (WSL/Bash)**
+  ```bash
+  aws cloudformation create-stack \
+    --stack-name nkc201-17-security \
+    --template-body file://CloudFromation/nkc201-17-02-security-stack.yaml \
     --parameters ParameterKey=VpcId,ParameterValue=vpc-00f9f872d1cede59e
   ```
 
-  **範例 B：部署 03 IAM Stack**
-  ```powershell
-  aws cloudformation create-stack `
-    --stack-name nkc201-17-iam `
-    --template-body (Get-Content CloudFromation/nkc201-17-03-iam-stack.yaml -Raw -Encoding UTF8) `
+  **範例 B：部署 03 IAM Stack (WSL/Bash)**
+  ```bash
+  aws cloudformation create-stack \
+    --stack-name nkc201-17-iam \
+    --template-body file://CloudFromation/nkc201-17-03-iam-stack.yaml \
     --capabilities CAPABILITY_NAMED_IAM
   ```
 
-  **範例 C：部署 04 EKS Cluster Stack**
-  ```powershell
-  aws cloudformation create-stack `
-    --stack-name nkc201-17-cluster `
-    --template-body (Get-Content CloudFromation/nkc201-17-04-eks-cluster-stack.yaml -Raw -Encoding UTF8) `
-    --parameters `
-      ParameterKey=EksClusterRoleArn,ParameterValue=<您的EksClusterRoleArn> `
-      ParameterKey=SecurityGroupIds,ParameterValue=<您的EksClusterSecurityGroupId> `
+  **範例 C：部署 04 EKS Cluster Stack (WSL/Bash)**
+  ```bash
+  aws cloudformation create-stack \
+    --stack-name nkc201-17-cluster \
+    --template-body file://CloudFromation/nkc201-17-04-eks-cluster-stack.yaml \
+    --parameters \
+      ParameterKey=EksClusterRoleArn,ParameterValue=<您的EksClusterRoleArn> \
+      ParameterKey=SecurityGroupIds,ParameterValue=<您的EksClusterSecurityGroupId> \
       ParameterKey=SubnetIds,ParameterValue=<PrivateAppSubnetA的ID>,<PrivateAppSubnetB的ID>,<PrivateAppSubnetC的ID>
   ```
+
+  > [!TIP]
+  > **若在 Windows PowerShell 中執行遇到編碼錯誤的解決方案：**
+  > 利用 PowerShell 的原生指令 `(Get-Content -Raw -Encoding UTF8)` 預先讀取檔案成 UTF-8 文字，再直接塞給 AWS CLI。
+  >
+  > ```powershell
+  > # 範例 A (PowerShell)
+  > aws cloudformation create-stack `
+  >   --stack-name nkc201-17-security `
+  >   --template-body (Get-Content CloudFromation/nkc201-17-02-security-stack.yaml -Raw -Encoding UTF8) `
+  >   --parameters ParameterKey=VpcId,ParameterValue=vpc-00f9f872d1cede59e
+  > 
+  > # 範例 B (PowerShell)
+  > aws cloudformation create-stack `
+  >   --stack-name nkc201-17-iam `
+  >   --template-body (Get-Content CloudFromation/nkc201-17-03-iam-stack.yaml -Raw -Encoding UTF8) `
+  >   --capabilities CAPABILITY_NAMED_IAM
+  > 
+  > # 範例 C (PowerShell)
+  > aws cloudformation create-stack `
+  >   --stack-name nkc201-17-cluster `
+  >   --template-body (Get-Content CloudFromation/nkc201-17-04-eks-cluster-stack.yaml -Raw -Encoding UTF8) `
+  >   --parameters `
+  >     ParameterKey=EksClusterRoleArn,ParameterValue=<您的EksClusterRoleArn> `
+  >     ParameterKey=SecurityGroupIds,ParameterValue=<您的EksClusterSecurityGroupId> `
+  >     ParameterKey=SubnetIds,ParameterValue=<PrivateAppSubnetA的ID>,<PrivateAppSubnetB的ID>,<PrivateAppSubnetC的ID>
+  > ```

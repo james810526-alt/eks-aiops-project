@@ -37,9 +37,9 @@
   * **在整個叢集級別 (Cluster-wide)：** 擁有 `AmazonEKSViewerPolicy`（唯讀權限）。不能隨意修改大樓結構，但可以走到大廳看一看（查看 Node 狀態、Storage 資訊等），便於排查整體環境問題，同時避免不小心刪除系統核心組件（如 `kube-system` 命名空間下的網路外掛）。
 
 ### 2. 🤖 自動化修復機器人 (`CodeBuildRole`)
-* **晶片卡權限：** **全棟大樓萬能鑰匙 (Master Key)**
+* **晶片卡權限：** **特定房間通行證**
 * **K8s 內部權限對應：**
-  * **整個叢集級別 (Cluster-wide)：** 擁有 `AmazonEKSClusterAdminPolicy`（叢集超級管理員）。這是最高層級權限，讓 AI 驅動的自動化系統在檢測到任何 Namespace（包含系統層級）異常時，能有權限自動套用修正，重啟異常 Pod。
+  * **在 `web-prod` 與 `aiops` 命名空間中：** 擁有 `AmazonEKSAdminPolicy`。此設計將自動修復範圍限縮於專題應用與 AIOps 命名空間，避免 CodeBuild 誤改 `kube-system` 等核心命名空間。
 
 ---
 
@@ -110,10 +110,13 @@ Resources:
         Fn::ImportValue: !Sub "${IamStackName}-CodeBuildRoleArn"
       Type: STANDARD
       AccessPolicies:
-        # 2.1 叢集全域管理員：讓 CodeBuild 可以對任意 Namespace 套用修正
-        - PolicyArn: arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy
+        # 2.1 限制在 web-prod 與 aiops 命名空間下擁有管理員 (Admin) 權限，避免對系統核心空間造成衝擊
+        - PolicyArn: arn:aws:eks::aws:cluster-access-policy/AmazonEKSAdminPolicy
           AccessScope:
-            Type: cluster
+            Type: namespace
+            Namespaces:
+              - web-prod
+              - aiops
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-codebuild-access"
@@ -141,21 +144,36 @@ Outputs:
 
 ## 💻 部署指令參考
 
-請在您的專題資料夾下開啟 **PowerShell** 執行以下指令進行部署（我們將會自動載入 Stack 03 與 Stack 04 導出的變數，無需手動複製貼上 ARN）：
+請在 **WSL (Bash)** 中執行以下指令：
 
-```powershell
+```bash
 # 1. 鎖定登入 Profile
-$env:AWS_PROFILE="nkc201-17-sso"
+export AWS_PROFILE="nkc201-17-sso"
 
 # 2. 執行部署指令
-aws cloudformation create-stack `
-  --stack-name nkc201-17-07-access-stack `
-  --template-body (Get-Content CloudFromation/nkc201-17-07-access-stack.yaml -Raw -Encoding UTF8) `
-  --parameters `
-    ParameterKey=ClusterStackName,ParameterValue=nkc201-17-04-eks-cluster-stack `
-    ParameterKey=IamStackName,ParameterValue=nkc201-17-03-iam-stack `
-  --profile nkc201-17-sso
+aws cloudformation create-stack \
+  --stack-name nkc201-17-07-access-stack \
+  --template-body file://CloudFromation/nkc201-17-07-access-stack.yaml \
+  --parameters \
+    ParameterKey=ClusterStackName,ParameterValue=nkc201-17-04-eks-cluster-stack \
+    ParameterKey=IamStackName,ParameterValue=nkc201-17-03-iam-stack
 ```
+
+> [!TIP]
+> **Windows PowerShell 備用指令**
+> ```powershell
+> # 1. 鎖定登入 Profile
+> $env:AWS_PROFILE="nkc201-17-sso"
+> 
+> # 2. 執行部署指令
+> aws cloudformation create-stack `
+>   --stack-name nkc201-17-07-access-stack `
+>   --template-body (Get-Content CloudFromation/nkc201-17-07-access-stack.yaml -Raw -Encoding UTF8) `
+>   --parameters `
+>     ParameterKey=ClusterStackName,ParameterValue=nkc201-17-04-eks-cluster-stack `
+>     ParameterKey=IamStackName,ParameterValue=nkc201-17-03-iam-stack `
+>   --profile nkc201-17-sso
+> ```
 
 ---
 
@@ -164,17 +182,30 @@ aws cloudformation create-stack `
 部署完成後，您可以透過 AWS CLI 查詢 EKS 叢集目前登錄的晶片卡名單（Access Entries）來進行驗證：
 
 ### 1. 查詢叢集上已註冊的 Access Entries 列表：
-```powershell
+```bash
 aws eks list-access-entries --cluster-name eks-aiops-mumbai --profile nkc201-17-sso
 ```
-* **預期結果：** 會回傳包含 `EngineerRole` 與 `CodeBuildRole` 的 ARN 列表。
 
 ### 2. 詳細檢視 `EngineerRole` 綁定的 Kubernetes 策略：
-```powershell
+```bash
 # 請將 <EngineerRoleArn> 替換為實際的 EngineerRole ARN (例如 arn:aws:iam::xxxxxxxxxxxx:role/eks-aiops-demo-engineer-role)
-aws eks list-associated-access-policies `
-  --cluster-name eks-aiops-mumbai `
-  --principal-arn <EngineerRoleArn> `
+aws eks list-associated-access-policies \
+  --cluster-name eks-aiops-mumbai \
+  --principal-arn <EngineerRoleArn> \
   --profile nkc201-17-sso
 ```
+
+> [!TIP]
+> **Windows PowerShell 備用指令**
+> ```powershell
+> # 1. 查詢列表
+> aws eks list-access-entries --cluster-name eks-aiops-mumbai --profile nkc201-17-sso
+> 
+> # 2. 詳細檢視策略 (以反引號換行)
+> aws eks list-associated-access-policies `
+>   --cluster-name eks-aiops-mumbai `
+>   --principal-arn <EngineerRoleArn> `
+>   --profile nkc201-17-sso
+> ```
+
 * **預期結果：** 會列出 `AmazonEKSAdminPolicy` (限 namespace `web-prod`, `aiops`) 以及 `AmazonEKSViewerPolicy` (全叢集)。

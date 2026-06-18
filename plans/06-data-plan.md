@@ -162,22 +162,39 @@ Outputs:
 
 ## 💻 部署指令參考
 
-請在您的專題資料夾下開啟 **PowerShell** 執行以下指令進行部署（採用 UTF-8 原生文字讀取以避開 Windows 系統編碼錯誤）：
+請在 **WSL (Bash)** 中執行以下指令：
 
-```powershell
+```bash
 # 1. 先鎖定登入 Profile
-$env:AWS_PROFILE="nkc201-17-sso"
+export AWS_PROFILE="nkc201-17-sso"
 
-# 2. 執行部署指令 (請將 <...> 替換成實際資料)
-aws cloudformation create-stack `
-  --stack-name nkc201-17-data `
-  --template-body (Get-Content CloudFromation/nkc201-17-06-data-stack.yaml -Raw -Encoding UTF8) `
-  --parameters `
-    ParameterKey=VpcId,ParameterValue=<您的VpcId，如 vpc-00f9f872d1cede59e> `
-    ParameterKey=RdsSecurityGroupId,ParameterValue=<您的RdsSecurityGroupId，如 sg-xxxxxx> `
+# 2. 執行部署指令
+aws cloudformation create-stack \
+  --stack-name nkc201-17-data \
+  --template-body file://CloudFromation/nkc201-17-06-data-stack.yaml \
+  --parameters \
+    ParameterKey=VpcId,ParameterValue=<您的VpcId，如 vpc-00f9f872d1cede59e> \
+    ParameterKey=RdsSecurityGroupId,ParameterValue=<您的RdsSecurityGroupId，如 sg-xxxxxx> \
     ParameterKey=PrivateDataSubnets,ParameterValue=<您的3個PrivateDataSubnetID，以逗號分隔>
 ```
-*(💡 提示：多個子網路 ID 請使用半形逗號 `,` 分開，中間不要有任何空格)*
+*(💡 提示：多個子網路 ID 請使用半形逗號 `,` 分開，在 Bash 中不需加反引號逃逸)*
+
+> [!TIP]
+> **Windows PowerShell 備用指令**
+> 若要在 Windows PowerShell 中執行，可使用以下格式：
+> ```powershell
+> # 1. 先鎖定登入 Profile
+> $env:AWS_PROFILE="nkc201-17-sso"
+> 
+> # 2. 執行部署指令
+> aws cloudformation create-stack `
+>   --stack-name nkc201-17-data `
+>   --template-body (Get-Content CloudFromation/nkc201-17-06-data-stack.yaml -Raw -Encoding UTF8) `
+>   --parameters `
+>     ParameterKey=VpcId,ParameterValue=<您的VpcId，如 vpc-00f9f872d1cede59e> `
+>     ParameterKey=RdsSecurityGroupId,ParameterValue=<您的RdsSecurityGroupId，如 sg-xxxxxx> `
+>     ParameterKey=PrivateDataSubnets,ParameterValue=<您的3個PrivateDataSubnetID，以逗號分隔>
+> ```
 
 ---
 
@@ -186,10 +203,17 @@ aws cloudformation create-stack `
 ### 1. 如何查看 Secrets Manager 自動產生的隨機資料庫密碼？
 因為我們讓 Secrets Manager 自動亂數生成高強度密碼，您在網頁上是看不到的。但您可以執行此 AWS CLI 指令，直接向保險箱調閱帳密：
 
-```powershell
-# 請確保已執行 $env:AWS_PROFILE="nkc201-17-sso"
+```bash
+# 請確保已執行 export AWS_PROFILE="nkc201-17-sso" (WSL Bash)
 aws secretsmanager get-secret-value --secret-id eks-aiops-demo-rds-secret --query "SecretString" --output text
 ```
+
+> [!TIP]
+> **Windows PowerShell 備用指令**
+> ```powershell
+> # 請確保已執行 $env:AWS_PROFILE="nkc201-17-sso"
+> aws secretsmanager get-secret-value --secret-id eks-aiops-demo-rds-secret --query "SecretString" --output text
+> ```
 * **執行後會輸出 JSON 格式的帳密：**
   ```json
   {"username": "admin", "password": "gH8#kL2!mP9$xY7q"}
