@@ -104,16 +104,27 @@ Resources:
   # 5. 動態插入互聯規則 (解決 EKS Cluster 與 Node 的雙向通訊循環相依)
   # =========================================================================
 
-  # ALB -> Nodes (大門 -> 辦公區): 允許 ALB 將流量導向節點/Pod 上的任何 TCP 埠口 (支持各種容器埠與健康檢查)
-  AlbToNodeIngressAllTCP:
+  # ALB -> Nodes (NodePort 範圍): 允許 ALB 將流量導向節點的 NodePort
+  AlbToNodeIngressNodePorts:
     Type: AWS::EC2::SecurityGroupIngress
     Properties:
       GroupId: !Ref EksNodeSecurityGroup
       SourceSecurityGroupId: !Ref AlbSecurityGroup
       IpProtocol: tcp
-      FromPort: 0
-      ToPort: 65535
-      Description: Allow ALB to talk to nodes on any TCP port for target routing
+      FromPort: 30000
+      ToPort: 32767
+      Description: Allow ALB to talk to nodes on NodePort range for target routing
+
+  # ALB -> Nodes (HTTP 業務埠口): 允許 ALB 直連 Pod 的 Port 80 (target-type: ip)
+  AlbToNodeIngressHttp:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref EksNodeSecurityGroup
+      SourceSecurityGroupId: !Ref AlbSecurityGroup
+      IpProtocol: tcp
+      FromPort: 80
+      ToPort: 80
+      Description: Allow ALB to talk to nodes on Port 80 for target-type ip routing
 
   # Cluster -> Nodes (經理室 -> 辦公區): 允許控制面發送指令給節點 (如 kubectl logs)
   ClusterToNodeIngress443:

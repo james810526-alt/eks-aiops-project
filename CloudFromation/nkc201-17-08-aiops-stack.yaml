@@ -101,12 +101,12 @@ Resources:
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
-              # 3.1 允許調用 Amazon Bedrock 孟買區 LLM
+              # 3.1 允許調用 Amazon Bedrock 孟買區 LLM (限制特定模型與區域)
               - Effect: Allow
                 Action:
                   - bedrock:InvokeModel
                   - bedrock:InvokeModelWithResponseStream
-                Resource: 'arn:aws:bedrock:*::foundation-model/*'
+                Resource: !Sub "arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude-3-haiku-*-v1:0"
               # 3.2 允許發送告警至專用 SNS
               - Effect: Allow
                 Action:
@@ -137,6 +137,7 @@ Resources:
       Role: !GetAtt LambdaExecutionRole.Arn
       Timeout: 120 # Bedrock 思考可能耗時，超時設為 2 分鐘
       MemorySize: 256
+      ReservedConcurrentExecutions: 2
       Environment:
         Variables:
           DYNAMODB_TABLE: !Ref AlertCacheTable
@@ -446,7 +447,9 @@ Resources:
                   query_params = event.get('queryStringParameters', {}) or {}
                   alert_hash = query_params.get('hash')
                   token = query_params.get('token')
-                  confirm = query_params.get('confirm')
+                  
+                  # 檢查 HTTP 方法 (API Gateway v2.0)
+                  method = event.get('requestContext', {}).get('http', {}).get('method', 'GET').upper()
 
                   if not alert_hash or not token:
                       return {
@@ -495,13 +498,13 @@ Resources:
                               'headers': {'Content-Type': 'text/html; charset=utf-8'}
                           }
 
-                      # 2. Prefetch / 二次點擊預防：若未點選確認，回傳 HTML 二次確認網頁
-                      if confirm != 'true':
+                      # 2. Prefetch / 二次點擊預防：若為 GET 請求則回傳 HTML 二次確認網頁 (Form POST)
+                      if method != 'POST':
                           headers = event.get('headers', {})
                           domain_name = event.get('requestContext', {}).get('domainName', '')
                           if not domain_name:
                               domain_name = headers.get('host', '')
-                          confirm_url = f"https://{domain_name}/approve?hash={alert_hash}&token={token}&confirm=true"
+                          confirm_url = f"https://{domain_name}/approve?hash={alert_hash}&token={token}"
 
                           html_body = f"""<!DOCTYPE html>
           <html>
@@ -562,6 +565,8 @@ Resources:
                 text-decoration: none;
                 cursor: pointer;
                 transition: transform 0.2s, box-shadow 0.2s;
+                font-family: 'Inter', sans-serif;
+                font-size: 14px;
               }}
               .btn:hover {{
                 transform: translateY(-2px);
@@ -574,7 +579,9 @@ Resources:
               <h1>核准自動修復</h1>
               <p>請確認是否要在 EKS 私有叢集中執行以下修復指令：</p>
               <div class="code-block">{command}</div>
-              <a href="{confirm_url}" class="btn">確認執行修復</a>
+              <form action="{confirm_url}" method="POST" style="margin: 0;">
+                <button type="submit" class="btn">確認執行修復</button>
+              </form>
             </div>
           </body>
           </html>"""
@@ -648,7 +655,8 @@ Resources:
                   query_params = event.get('queryStringParameters', {}) or {}
                   alert_hash = query_params.get('hash')
                   token = query_params.get('token')
-                  confirm = query_params.get('confirm')
+                  
+                  method = event.get('requestContext', {}).get('http', {}).get('method', 'GET').upper()
 
                   if not alert_hash or not token:
                       return {
@@ -686,12 +694,13 @@ Resources:
                               'headers': {'Content-Type': 'text/html; charset=utf-8'}
                           }
 
-                      if confirm != 'true':
+                      # 2. Prefetch / 二次點擊預防：若為 GET 請求則回傳 HTML 二次確認網頁 (Form POST)
+                      if method != 'POST':
                           headers = event.get('headers', {})
                           domain_name = event.get('requestContext', {}).get('domainName', '')
                           if not domain_name:
                               domain_name = headers.get('host', '')
-                          confirm_url = f"https://{domain_name}/reject?hash={alert_hash}&token={token}&confirm=true"
+                          confirm_url = f"https://{domain_name}/reject?hash={alert_hash}&token={token}"
 
                           html_body = f"""<!DOCTYPE html>
           <html>
@@ -741,6 +750,8 @@ Resources:
                 text-decoration: none;
                 cursor: pointer;
                 transition: transform 0.2s, box-shadow 0.2s;
+                font-family: 'Inter', sans-serif;
+                font-size: 14px;
               }}
               .btn-reject:hover {{
                 transform: translateY(-2px);
@@ -753,7 +764,9 @@ Resources:
               <h1>拒絕自動修復</h1>
               <p>您是否要拒絕並取消執行針對此異常的 AI 自動修復指令？</p>
               <br>
-              <a href="{confirm_url}" class="btn-reject">確認拒絕修復</a>
+              <form action="{confirm_url}" method="POST" style="margin: 0;">
+                <button type="submit" class="btn-reject">確認拒絕修復</button>
+              </form>
             </div>
           </body>
           </html>"""
@@ -763,13 +776,22 @@ Resources:
                               'headers': {'Content-Type': 'text/html; charset=utf-8'}
                           }
 
-                      # 更新狀態為 REJECTED
-                      table.update_item(
-                          Key={'AlertHash': alert_hash},
-                          UpdateExpression="set #st = :s",
-                          ExpressionAttributeNames={'#st': 'Status'},
-                          ExpressionAttributeValues={':s': 'REJECTED'}
-                      )
+                      # 更新狀態為 REJECTED (附帶條件防重複觸發)
+                      try:
+                          table.update_item(
+                              Key={'AlertHash': alert_hash},
+                              UpdateExpression="set #st = :s",
+                              ExpressionAttributeNames={'#st': 'Status'},
+                              ExpressionAttributeValues={':s': 'REJECTED', ':pending': 'PENDING'},
+                              ConditionExpression="Status = :pending"
+                          )
+                      except dynamodb.meta.client.exceptions.ConditionalCheckFailedException:
+                          return {
+                              'statusCode': 400,
+                              'body': '<html><body><h1>Action Already Taken</h1><p>This alert has already been resolved or processed.</p></body></html>',
+                              'headers': {'Content-Type': 'text/html; charset=utf-8'}
+                          }
+
                       return {
                           'statusCode': 200,
                           'body': '<html><body><h1 style="color:red;">Remediation Rejected</h1><p>Remediation canceled by engineer.</p></body></html>',
@@ -814,14 +836,14 @@ Resources:
     Type: AWS::ApiGatewayV2::Route
     Properties:
       ApiId: !Ref AioOpsApi
-      RouteKey: "GET /approve"
+      RouteKey: "ANY /approve"
       Target: !Sub "integrations/${ApiLambdaIntegration}"
 
   RejectRoute:
     Type: AWS::ApiGatewayV2::Route
     Properties:
       ApiId: !Ref AioOpsApi
-      RouteKey: "GET /reject"
+      RouteKey: "ANY /reject"
       Target: !Sub "integrations/${ApiLambdaIntegration}"
 
   ApiLogGroup:
