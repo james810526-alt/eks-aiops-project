@@ -1,4 +1,4 @@
-# AWS CloudFormation 主控台一鍵部署指南 (EKS AIOps 專題)
+﻿# AWS CloudFormation 主控台一鍵部署指南 (EKS AIOps 專題)
 
 為了減少在 WSL 或 PowerShell 終端機執行 CLI 指令時可能遇到的語法、編碼與認證問題，建議您**直接使用 AWS Web 主控台 (AWS Console)** 進行 CloudFormation 部署。
 
@@ -129,3 +129,50 @@
   7. ⚠️ **部署完成後的重要動作**：
      - 檢查您的工程師信箱，會收到一封 AWS SNS 的訂閱確認信，請點選 **"Confirm subscription"** 連結啟用告警。
      - 在 Stack 08 的 Outputs 中複製 `ApiEndpoint`，此即為 API Gateway 的路由網址（包含 `/webhook`、`/approve`、`/reject`）。
+
+---
+
+## 9️⃣ EKS 內部資源與 K8sGPT 監控對接 (Day 10)
+
+在完成 1️⃣ 到 8️⃣ 所有 AWS 雲端基礎設施部署後，最後需要登入 **SSM 安全跳板機**，將測試用網頁 App 與 K8sGPT 掃描器部署進 EKS 叢集中。
+
+### 步驟 1：登入 SSM 跳板機並配對 EKS
+1. 在您本地電腦的 PowerShell 中，執行以下指令登入跳板機（請將 `<BastionInstanceId>` 替換為 Stack 05 Outputs 產出的實例 ID）：
+   ```powershell
+   $env:AWS_PROFILE="nkc201-17-sso"
+   aws ssm start-session --target <BastionInstanceId>
+   ```
+2. 成功登入 Linux shell 後，執行以下指令以配對 EKS 控制面：
+   ```bash
+   aws eks update-kubeconfig --region ap-south-1 --name eks-aiops-mumbai
+   ```
+
+### 步驟 2：使用 Helm 安裝 K8sGPT Operator
+在跳板機內執行以下開源套件 Helm 安裝指令：
+```bash
+# 新增 K8sGPT 官方 Helm 倉庫並更新
+helm repo add k8sgpt https://charts.k8sgpt.ai/
+helm repo update
+
+# 安裝 K8sGPT Operator 至 aiops 命名空間
+helm install k8sgpt-operator k8sgpt/k8sgpt-operator --namespace aiops --create-namespace
+```
+
+### 步驟 3：部署測試電子商務網站 (web-demo)
+1. 將 `Kubernetes/web-prod-app.yaml` 套用至叢集：
+   ```bash
+   kubectl apply -f web-prod-app.yaml
+   ```
+2. **驗證部署**：
+   * 執行 `kubectl get pods -n web-prod` 確認 3 個 Pod 皆為 `Running` 狀態。
+   * 執行 `kubectl get ingress -n web-prod` 複製 ALB 負載均衡器的公網 DNS 網址，並在瀏覽器中開啟驗證網頁首頁正常運作。
+
+### 步驟 4：設定 K8sGPT Webhook 警報對接
+1. 打開 `Kubernetes/k8sgpt-operator-config.yaml` 檔案。
+2. 找到 `Secret` 區塊，將其中的 `https://<YOUR_API_GATEWAY_ENDPOINT>/webhook` 替換為您在 **Stack 08** Outputs 取得的 `ApiEndpoint` 加上 `/webhook`。
+3. 將修改後的 `Kubernetes/k8sgpt-operator-config.yaml` 套用至叢集：
+   ```bash
+   kubectl apply -f k8sgpt-operator-config.yaml
+   ```
+4. **驗證警報對接**：
+   * 執行 `kubectl get pods -n aiops` 檢查 `k8sgpt-aiops` 掃描器實例已正常啟動並在後台開始巡邏！
