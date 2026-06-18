@@ -365,6 +365,23 @@ Resources:
                 Action:
                   - eks:DescribeCluster
                 Resource: '*'
+              - Effect: Allow
+                Action:
+                  - ec2:CreateNetworkInterface
+                  - ec2:DescribeDhcpOptions
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:DeleteNetworkInterface
+                  - ec2:DescribeSubnets
+                  - ec2:DescribeSecurityGroups
+                  - ec2:DescribeVpcs
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ec2:CreateNetworkInterfacePermission
+                Resource: !Sub "arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:network-interface/*"
+                Condition:
+                  StringEquals:
+                    ec2:AuthorizedService: codebuild.amazonaws.com
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-codebuild-role"
