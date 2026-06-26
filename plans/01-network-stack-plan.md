@@ -1,4 +1,4 @@
-# 01 Network Stack - 網路架構計畫
+﻿# 01 Network Stack - 網路架構計畫
 
 本計畫紀錄了針對 `nkc201-17-01-network-stack.yaml` 的檢查、修正與優化歷程。
 
@@ -29,7 +29,7 @@
 
 ## 🛠️ 調整後的完整 CloudFormation 藍圖
 
-已寫入並更新至：`CloudFromation/nkc201-17-01-network-stack.yaml`
+已寫入並更新至：`CloudFormation/nkc201-17-01-network-stack.yaml`
 
 ```yaml
 AWSTemplateFormatVersion: '2010-09-09'
@@ -508,3 +508,4 @@ Outputs:
     Description: Private Data Subnet C ID
     Value: !Ref PrivateDataSubnetC
 ```
+

@@ -1,0 +1,658 @@
+import json
+import os
+import boto3
+import hashlib
+import time
+import uuid
+import re
+
+dynamodb = boto3.resource('dynamodb')
+sns = boto3.client('sns')
+bedrock = boto3.client('bedrock-runtime', region_name='ap-south-1')
+codebuild = boto3.client('codebuild')
+
+def handler(event, context):
+    print("Received event:", json.dumps(event))
+    path = event.get('rawPath', '')
+
+    table_name = os.environ.get('DYNAMODB_TABLE')
+    sns_topic_arn = os.environ.get('SNS_TOPIC_ARN')
+    codebuild_project = os.environ.get('CODEBUILD_PROJECT')
+    model_id = os.environ.get('BEDROCK_MODEL_ID', 'anthropic.claude-3-haiku-20240307-v1:0')
+
+    table = dynamodb.Table(table_name)
+
+    if path == '/webhook':
+        # 1. Webhook Token 認證 (防止惡意呼叫與 Bedrock 費用被刷爆)
+        query_params = event.get('queryStringParameters', {}) or {}
+        webhook_token = query_params.get('token') if query_params else None
+        if webhook_token != 'eks-aiops-webhook-secret-token':
+            print("Unauthorized webhook call: Invalid or missing token")
+            return {
+                'statusCode': 401,
+                'body': json.dumps({'message': 'Unauthorized: Invalid token'})
+            }
+
+        body_str = event.get('body', '{}')
+        try:
+            body = json.loads(body_str)
+        except Exception:
+            body = {}
+
+        name = body.get('name', 'unknown-resource')
+        namespace = body.get('namespace', 'default')
+        error_msg = body.get('error', '')
+
+        if not error_msg:
+            return {
+                'statusCode': 400,
+                'body': json.dumps({'message': 'Missing error field'})
+            }
+
+        # 計算 AlertHash 作為告警去重的依據
+        hash_src = f"{namespace}:{name}:{error_msg}"
+        alert_hash = hashlib.sha256(hash_src.encode('utf-8')).hexdigest()
+
+        current_time = int(time.time())
+        cooling_period = 600
+        expiry_time = current_time + cooling_period
+        one_time_token = uuid.uuid4().hex
+
+        # 檢查與建立原子鎖 (DynamoDB Atomic Conditional Put)
+        try:
+            table.put_item(
+                Item={
+                    'AlertHash': alert_hash,
+                    'ExpiryTime': expiry_time,
+                    'Namespace': namespace,
+                    'ResourceName': name,
+                    'ErrorMsg': error_msg,
+                    'OneTimeToken': one_time_token,
+                    'Status': 'ANALYZING',
+                    'CreatedTime': current_time,
+                    'RemediationCommand': 'echo Running Bedrock analysis...'
+                },
+                ConditionExpression="attribute_not_exists(AlertHash) OR ExpiryTime < :now",
+                ExpressionAttributeValues={':now': current_time}
+            )
+        except dynamodb.meta.client.exceptions.ConditionalCheckFailedException:
+            # 已在快取中且尚未過期
+            print(f"Alert {alert_hash} throttled (already exists and active).")
+            return {
+                'statusCode': 200,
+                'body': json.dumps({'message': 'Alert throttled (cooling period or active analysis)', 'hash': alert_hash})
+            }
+        except Exception as e:
+            print("Error locking alert in DynamoDB:", str(e))
+            return {
+                'statusCode': 500,
+                'body': json.dumps({'message': f'DynamoDB lock error: {str(e)}'})
+            }
+
+        # 呼叫 Bedrock 來分析錯誤
+        prompt = (
+            f"You are a professional AWS EKS Kubernetes operations expert.\n"
+            f"We detected an error in our cluster:\n"
+            f"Resource Name: {name}\n"
+            f"Namespace: {namespace}\n"
+            f"Error Message: {error_msg}\n\n"
+            f"Please provide a diagnostic report in Traditional Chinese (繁體中文).\n"
+            f"Include the following sections:\n"
+            f"1. 問題摘要\n"
+            f"2. 影響範圍\n"
+            f"3. 可能原因\n"
+            f"4. 建議修復方式\n"
+            f"5. 建議修復指令\n\n"
+            f"IMPORTANT: You MUST also provide a structured JSON action block at the very end of your response, prefixed with 'ACTION_JSON: '. "
+            f"Format it exactly as a single line JSON without markdown code fences or line breaks. "
+            f"Example: ACTION_JSON: {{\"action\": \"restart_deployment\", \"namespace\": \"{namespace}\", \"resource_name\": \"{name}\"}}\n\n"
+            f"Allowed values for action are:\n"
+            f"- \"restart_deployment\": to restart a deployment (resource_name is deployment name)\n"
+            f"- \"scale_deployment\": to scale a deployment (resource_name is deployment name, you must include a \"replicas\" integer field, e.g. 1)\n"
+            f"- \"delete_pod\": to delete a failed pod (resource_name is pod name)\n\n"
+            f"Choose the safest and most specific action to resolve this issue. Do not output raw command strings outside of this JSON structure."
+        )
+
+        diagnosis = "No Bedrock analysis generated."
+        remediation_command = "echo 'Remediation rejected: Bedrock invocation failed'"
+
+        try:
+            body_payload = {
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": 1000,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": prompt
+                            }
+                        ]
+                    }
+                ]
+            }
+
+            response = bedrock.invoke_model(
+                modelId=model_id,
+                body=json.dumps(body_payload)
+            )
+
+            response_body = json.loads(response.get('body').read())
+            diagnosis = response_body['content'][0]['text']
+            print("Bedrock response:", diagnosis)
+
+            # 解析結構化 action JSON 區塊
+            action_json_str = None
+            for line in diagnosis.split('\n'):
+                if "ACTION_JSON:" in line:
+                    action_json_str = line.split("ACTION_JSON:", 1)[1].strip()
+                    break
+
+            if action_json_str:
+                try:
+                    action_json_str = action_json_str.strip('`').strip()
+                    action_data = json.loads(action_json_str)
+
+                    action = action_data.get('action')
+                    action_ns = action_data.get('namespace')
+                    res_name = action_data.get('resource_name')
+
+                    # 嚴格白名單與防注入檢驗
+                    valid_namespaces = ['web-prod', 'aiops']
+                    valid_actions = ['restart_deployment', 'scale_deployment', 'delete_pod']
+
+                    if action_ns not in valid_namespaces:
+                        raise ValueError(f"Unauthorized namespace: {action_ns}")
+
+                    if action not in valid_actions:
+                        raise ValueError(f"Unauthorized action: {action}")
+
+                    if not res_name or not re.match(r'^[a-zA-Z0-9-.]+$', res_name):
+                        raise ValueError(f"Invalid resource name format: {res_name}")
+
+                    # 檢查是否含有 shell 注入關鍵字元
+                    for val in [str(action), str(action_ns), str(res_name)]:
+                        if any(c in val for c in [';', '&', '|', '`', '$', '>', '<', '\n', '\r']):
+                            raise ValueError(f"Dangerous characters detected in field: {val}")
+
+                    # 檢查防注入命令字串
+                    forbidden_keywords = ['delete namespace', 'clusterrolebinding', 'aws iam', 'curl', 'bash', 'sh']
+                    for kw in forbidden_keywords:
+                        if kw in action_json_str.lower():
+                            raise ValueError(f"Forbidden command keyword detected: {kw}")
+
+                    # 安全拼裝指令
+                    if action == 'restart_deployment':
+                        remediation_command = f"kubectl rollout restart deployment/{res_name} -n {action_ns}"
+                    elif action == 'scale_deployment':
+                        replicas = action_data.get('replicas', 1)
+                        try:
+                            replicas_int = int(replicas)
+                            if not (0 <= replicas_int <= 10):
+                                raise ValueError("Replicas out of safe range (0-10)")
+                        except Exception:
+                            raise ValueError("Invalid replicas parameter")
+                        remediation_command = f"kubectl scale deployment/{res_name} --replicas={replicas_int} -n {action_ns}"
+                    elif action == 'delete_pod':
+                        remediation_command = f"kubectl delete pod/{res_name} -n {action_ns}"
+
+                    print(f"Validation succeeded. Generated command: {remediation_command}")
+
+                except Exception as val_err:
+                    print(f"Validation failed: {str(val_err)}")
+                    remediation_command = f"echo 'Remediation rejected: {str(val_err)}'"
+            else:
+                print("No ACTION_JSON prefix found in Bedrock response.")
+                remediation_command = "echo 'Remediation rejected: No structured action JSON found'"
+
+        except Exception as e:
+            print("Error invoking Bedrock:", str(e))
+            diagnosis = f"Error calling Bedrock for analysis: {str(e)}\nOriginal Error: {error_msg}"
+            remediation_command = f"echo 'Remediation rejected: Bedrock invocation failed: {str(e)}'"
+
+            # 復原/註記 DynamoDB 狀態為 FAILED
+            try:
+                table.update_item(
+                    Key={'AlertHash': alert_hash},
+                    UpdateExpression="set #st = :s, ErrorMsg = :err",
+                    ExpressionAttributeNames={'#st': 'Status'},
+                    ExpressionAttributeValues={':s': 'FAILED', ':err': f"Bedrock invocation failed: {str(e)}"}
+                )
+            except Exception as d_err:
+                print("Failed to update status to FAILED in DynamoDB:", str(d_err))
+
+            return {
+                'statusCode': 500,
+                'body': json.dumps({'message': 'Failed to analyze error via Bedrock', 'error': str(e)})
+            }
+
+        # 將修復指令與狀態更新回 DynamoDB (Status 轉移至 PENDING)
+        try:
+            table.put_item(
+                Item={
+                    'AlertHash': alert_hash,
+                    'ExpiryTime': expiry_time,
+                    'Namespace': namespace,
+                    'ResourceName': name,
+                    'ErrorMsg': error_msg,
+                    'RemediationCommand': remediation_command,
+                    'Status': 'PENDING',
+                    'CreatedTime': current_time,
+                    'OneTimeToken': one_time_token,
+                    'Diagnosis': diagnosis
+                }
+            )
+        except Exception as e:
+            print("Error writing to DynamoDB:", str(e))
+
+        # 取得 domain 以生成 approve/reject 連結
+        headers = event.get('headers', {})
+        domain_name = event.get('requestContext', {}).get('domainName', '')
+        if not domain_name:
+            domain_name = headers.get('host', '')
+
+        approve_url = f"https://{domain_name}/approve?hash={alert_hash}&token={one_time_token}"
+        reject_url = f"https://{domain_name}/reject?hash={alert_hash}&token={one_time_token}"
+
+        # 發送 SNS 告警郵件
+        email_subject = f"[EKS AIOps Alert] 叢集異常偵測 - {name} ({namespace})"
+        email_body = (
+            f"【EKS 智能維運告警通知】\n\n"
+            f"我們偵測到 EKS 叢集中發生異常！\n\n"
+            f"● 異常資源: {name} (Namespace: {namespace})\n"
+            f"● 原始錯誤: {error_msg}\n\n"
+            f"=========================================\n"
+            f"🧠 AI 專家診斷報告與修復建議:\n"
+            f"=========================================\n"
+            f"{diagnosis}\n\n"
+            f"=========================================\n"
+            f"🛠️ 自動修復審查 (請點選以下連結):\n"
+            f"=========================================\n"
+            f"👉 【同意執行自動修復】:\n"
+            f"{approve_url}\n\n"
+            f"👉 【拒絕執行自動修復】:\n"
+            f"{reject_url}\n\n"
+            f"※ 提示：此修復建議由 Amazon Bedrock AI 自動生成，並將於安全 VPC 內網的 CodeBuild 環境中以 kubectl 執行。"
+        )
+        try:
+            sns.publish(
+                TopicArn=sns_topic_arn,
+                Subject=email_subject,
+                Message=email_body
+            )
+        except Exception as e:
+            print("Error publishing to SNS:", str(e))
+
+        return {
+            'statusCode': 200,
+            'body': json.dumps({'message': 'Webhook parsed, AI analysis sent', 'hash': alert_hash, 'command': remediation_command})
+        }
+
+    elif path == '/approve':
+        query_params = event.get('queryStringParameters', {}) or {}
+        alert_hash = query_params.get('hash')
+        token = query_params.get('token')
+        
+        # 檢查 HTTP 方法 (API Gateway v2.0)
+        method = event.get('requestContext', {}).get('http', {}).get('method', 'GET').upper()
+
+        if not alert_hash or not token:
+            return {
+                'statusCode': 400,
+                'body': '<html><body><h1 style="color:red;">Error</h1><p>Missing alert hash or token.</p></body></html>',
+                'headers': {'Content-Type': 'text/html; charset=utf-8'}
+            }
+
+        try:
+            response = table.get_item(Key={'AlertHash': alert_hash})
+            item = response.get('Item')
+            if not item:
+                return {
+                    'statusCode': 404,
+                    'body': '<html><body><h1 style="color:red;">Not Found</h1><p>Alert cache not found or expired.</p></body></html>',
+                    'headers': {'Content-Type': 'text/html; charset=utf-8'}
+                }
+
+            stored_token = item.get('OneTimeToken')
+            status = item.get('Status', 'PENDING')
+            command = item.get('RemediationCommand', '')
+
+            # 驗證一次性 Token
+            if stored_token != token:
+                return {
+                    'statusCode': 403,
+                    'body': '<html><body><h1 style="color:red;">Forbidden</h1><p>Invalid one-time token.</p></body></html>',
+                    'headers': {'Content-Type': 'text/html; charset=utf-8'}
+                }
+
+            # 驗證狀態轉移 (必須是 PENDING)
+            if status != 'PENDING':
+                return {
+                    'statusCode': 400,
+                    'body': f'<html><body><h1>Action Already Taken</h1><p>This alert has already been resolved or processed. Status: {status}</p></body></html>',
+                    'headers': {'Content-Type': 'text/html; charset=utf-8'}
+                }
+
+            # 驗證是否過期 (10 分鐘冷卻期)
+            current_time = int(time.time())
+            exp = int(item.get('ExpiryTime', 0))
+            if current_time > exp:
+                return {
+                    'statusCode': 400,
+                    'body': '<html><body><h1 style="color:red;">Expired</h1><p>This approval link has expired (10 minutes window has passed).</p></body></html>',
+                    'headers': {'Content-Type': 'text/html; charset=utf-8'}
+                }
+
+            # 2. Prefetch / 二次點擊預防：若為 GET 請求則回傳 HTML 二次確認網頁 (Form POST)
+            if method != 'POST':
+                headers = event.get('headers', {})
+                domain_name = event.get('requestContext', {}).get('domainName', '')
+                if not domain_name:
+                    domain_name = headers.get('host', '')
+                confirm_url = f"https://{domain_name}/approve?hash={alert_hash}&token={token}"
+
+                html_body = f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>AIOps Remediation Approve</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+  <style>
+    body {{
+      font-family: 'Inter', sans-serif;
+      background-color: #0b0f19;
+      color: #f3f4f6;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      margin: 0;
+    }}
+    .card {{
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 16px;
+      padding: 32px;
+      width: 450px;
+      text-align: center;
+      box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+      backdrop-filter: blur(12px);
+    }}
+    h1 {{
+      color: #10b981;
+      margin-bottom: 8px;
+      font-weight: 800;
+    }}
+    p {{
+      color: #9ca3af;
+      font-size: 14px;
+      line-height: 1.5;
+    }}
+    .code-block {{
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      padding: 12px;
+      font-family: monospace;
+      color: #38bdf8;
+      margin: 20px 0;
+      text-align: left;
+      word-break: break-all;
+    }}
+    .btn {{
+      display: inline-block;
+      background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      padding: 12px 24px;
+      font-weight: 600;
+      text-decoration: none;
+      cursor: pointer;
+      transition: transform 0.2s, box-shadow 0.2s;
+      font-family: 'Inter', sans-serif;
+      font-size: 14px;
+    }}
+    .btn:hover {{
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+    }}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>核准自動修復</h1>
+    <p>請確認是否要在 EKS 私有叢集中執行以下修復指令：</p>
+    <div class="code-block">{command}</div>
+    <form action="{confirm_url}" method="POST" style="margin: 0;">
+      <button type="submit" class="btn">確認執行修復</button>
+    </form>
+  </div>
+</body>
+</html>"""
+                return {
+                    'statusCode': 200,
+                    'body': html_body,
+                    'headers': {'Content-Type': 'text/html; charset=utf-8'}
+                }
+
+            # 3. 併發防護：先原子更新狀態至 APPROVED (防重複觸發)
+            try:
+                table.update_item(
+                    Key={'AlertHash': alert_hash},
+                    UpdateExpression="set #st = :approved, BuildId = :b",
+                    ExpressionAttributeNames={'#st': 'Status'},
+                    ExpressionAttributeValues={':approved': 'APPROVED', ':b': 'triggering', ':pending': 'PENDING'},
+                    ConditionExpression="Status = :pending"
+                )
+            except dynamodb.meta.client.exceptions.ConditionalCheckFailedException:
+                return {
+                    'statusCode': 400,
+                    'body': '<html><body><h1>Action Already Taken</h1><p>This alert has already been resolved or processed.</p></body></html>',
+                    'headers': {'Content-Type': 'text/html; charset=utf-8'}
+                }
+
+            # 觸發 CodeBuild 自動修復
+            cb_response = codebuild.start_build(
+                projectName=codebuild_project,
+                environmentVariablesOverride=[
+                    {
+                        'name': 'REM_COMMAND',
+                        'value': command,
+                        'type': 'PLAINTEXT'
+                    }
+                ]
+            )
+            build_id = cb_response.get('build', {}).get('id', 'unknown')
+
+            # 更新實際的 Build ID
+            table.update_item(
+                Key={'AlertHash': alert_hash},
+                UpdateExpression="set BuildId = :b",
+                ExpressionAttributeValues={':b': build_id}
+            )
+
+            # 發送啟動成功 SNS 通知
+            try:
+                sns.publish(
+                    TopicArn=sns_topic_arn,
+                    Subject=f"[EKS AIOps] 自動修復已啟動 - {item.get('ResourceName')}",
+                    Message=f"工程師已核准自動修復！\n\n執行指令：{command}\nCodeBuild Build ID: {build_id}\n正在 VPC 內網套用修復，請稍候..."
+                )
+            except Exception as sns_err:
+                print("Error sending approve SNS:", str(sns_err))
+
+            return {
+                'statusCode': 200,
+                'body': f'<html><body><h1 style="color:green;">Remediation Approved</h1><p>Command: <code>{command}</code></p><p>CodeBuild triggered successfully! Build ID: {build_id}</p></body></html>',
+                'headers': {'Content-Type': 'text/html; charset=utf-8'}
+            }
+
+        except Exception as e:
+            print("Error in approve route:", str(e))
+            return {
+                'statusCode': 500,
+                'body': f'<html><body><h1 style="color:red;">Internal Error</h1><p>{str(e)}</p></body></html>',
+                'headers': {'Content-Type': 'text/html; charset=utf-8'}
+            }
+
+    elif path == '/reject':
+        query_params = event.get('queryStringParameters', {}) or {}
+        alert_hash = query_params.get('hash')
+        token = query_params.get('token')
+        
+        method = event.get('requestContext', {}).get('http', {}).get('method', 'GET').upper()
+
+        if not alert_hash or not token:
+            return {
+                'statusCode': 400,
+                'body': '<html><body><h1 style="color:red;">Error</h1><p>Missing alert hash or token.</p></body></html>',
+                'headers': {'Content-Type': 'text/html; charset=utf-8'}
+            }
+
+        try:
+            response = table.get_item(Key={'AlertHash': alert_hash})
+            item = response.get('Item')
+            if not item:
+                return {
+                    'statusCode': 404,
+                    'body': '<html><body><h1 style="color:red;">Not Found</h1><p>Alert cache not found or expired.</p></body></html>',
+                    'headers': {'Content-Type': 'text/html; charset=utf-8'}
+                }
+
+            stored_token = item.get('OneTimeToken')
+            status = item.get('Status', 'PENDING')
+
+            # 驗證一次性 Token
+            if stored_token != token:
+                return {
+                    'statusCode': 403,
+                    'body': '<html><body><h1 style="color:red;">Forbidden</h1><p>Invalid one-time token.</p></body></html>',
+                    'headers': {'Content-Type': 'text/html; charset=utf-8'}
+                }
+
+            # 驗證狀態轉移 (必須是 PENDING)
+            if status != 'PENDING':
+                return {
+                    'statusCode': 400,
+                    'body': f'<html><body><h1>Action Already Taken</h1><p>This alert has already been resolved or processed. Status: {status}</p></body></html>',
+                    'headers': {'Content-Type': 'text/html; charset=utf-8'}
+                }
+
+            # 2. Prefetch / 二次點擊預防：若為 GET 請求則回傳 HTML 二次確認網頁 (Form POST)
+            if method != 'POST':
+                headers = event.get('headers', {})
+                domain_name = event.get('requestContext', {}).get('domainName', '')
+                if not domain_name:
+                    domain_name = headers.get('host', '')
+                confirm_url = f"https://{domain_name}/reject?hash={alert_hash}&token={token}"
+
+                html_body = f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>AIOps Remediation Reject</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+  <style>
+    body {{
+      font-family: 'Inter', sans-serif;
+      background-color: #0b0f19;
+      color: #f3f4f6;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      margin: 0;
+    }}
+    .card {{
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 16px;
+      padding: 32px;
+      width: 450px;
+      text-align: center;
+      box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+      backdrop-filter: blur(12px);
+    }}
+    h1 {{
+      color: #ef4444;
+      margin-bottom: 8px;
+      font-weight: 800;
+    }}
+    p {{
+      color: #9ca3af;
+      font-size: 14px;
+      line-height: 1.5;
+    }}
+    .btn-reject {{
+      display: inline-block;
+      background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      padding: 12px 24px;
+      font-weight: 600;
+      text-decoration: none;
+      cursor: pointer;
+      transition: transform 0.2s, box-shadow 0.2s;
+      font-family: 'Inter', sans-serif;
+      font-size: 14px;
+    }}
+    .btn-reject:hover {{
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+    }}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>拒絕自動修復</h1>
+    <p>您是否要拒絕並取消執行針對此異常的 AI 自動修復指令？</p>
+    <br>
+    <form action="{confirm_url}" method="POST" style="margin: 0;">
+      <button type="submit" class="btn-reject">確認拒絕修復</button>
+    </form>
+  </div>
+</body>
+</html>"""
+                return {
+                    'statusCode': 200,
+                    'body': html_body,
+                    'headers': {'Content-Type': 'text/html; charset=utf-8'}
+                }
+
+            # 更新狀態為 REJECTED (附帶條件防重複觸發)
+            try:
+                table.update_item(
+                    Key={'AlertHash': alert_hash},
+                    UpdateExpression="set #st = :s",
+                    ExpressionAttributeNames={'#st': 'Status'},
+                    ExpressionAttributeValues={':s': 'REJECTED', ':pending': 'PENDING'},
+                    ConditionExpression="Status = :pending"
+                )
+            except dynamodb.meta.client.exceptions.ConditionalCheckFailedException:
+                return {
+                    'statusCode': 400,
+                    'body': '<html><body><h1>Action Already Taken</h1><p>This alert has already been resolved or processed.</p></body></html>',
+                    'headers': {'Content-Type': 'text/html; charset=utf-8'}
+                }
+
+            return {
+                'statusCode': 200,
+                'body': '<html><body><h1 style="color:red;">Remediation Rejected</h1><p>Remediation canceled by engineer.</p></body></html>',
+                'headers': {'Content-Type': 'text/html; charset=utf-8'}
+            }
+        except Exception as e:
+            print("Error in reject route:", str(e))
+            return {
+                'statusCode': 500,
+                'body': f'<html><body><h1 style="color:red;">Internal Error</h1><p>{str(e)}</p></body></html>',
+                'headers': {'Content-Type': 'text/html; charset=utf-8'}
+            }
+
+    return {
+        'statusCode': 404,
+        'body': 'Not Found'
+    }
+

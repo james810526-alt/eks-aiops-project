@@ -1,3 +1,5 @@
+# Template file. Render and apply it with deploy-web-prod.sh so the ALB
+# security group ID exported by Stack 02 is injected before kubectl runs.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -71,6 +73,13 @@ spec:
     app: web-prod
 ---
 apiVersion: networking.k8s.io/v1
+kind: IngressClass
+metadata:
+  name: alb
+spec:
+  controller: ingress.k8s.aws/alb
+---
+apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: web-demo-ingress
@@ -79,6 +88,7 @@ metadata:
     alb.ingress.kubernetes.io/scheme: internet-facing
     alb.ingress.kubernetes.io/target-type: ip
     alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}]'
+    alb.ingress.kubernetes.io/security-groups: "__ALB_SECURITY_GROUP_ID__"
 spec:
   ingressClassName: alb
   rules:

@@ -18,7 +18,12 @@
 - **避免逾時**：若在 Stack 04 (只有控制面，無節點) 建立 CoreDNS Addon，Addon 將因無法排程而長期待在 `DEGRADED` 狀態，導致 CloudFormation 出現 20 分鐘的建立逾時與失敗。
 - **解決方案**：將 CoreDNS Addon 移動至本 Stack，並宣告 `DependsOn: EksNodeGroup`。當工作節點順利啟動並加入叢集後，才安裝 CoreDNS，使其能瞬間完成排程，快速變成 `ACTIVE`。
 
-### 4. 💰 專題省錢優化設計
+### 4. 🔐 Launch Template 與 Security Groups
+- **問題修正**：Managed Node Group 原本沒有掛上 Stack 02 的自訂 Node SG，導致以該 SG 為來源的 RDS 規則無法匹配 Worker Nodes。
+- **解決方案**：由 Stack 05 建立 Launch Template，同時掛上自訂 Node SG 與 Stack 04 輸出的 EKS Cluster SG。
+- **重要限制**：使用自訂 SG 後，EKS 不會自動補上 Cluster SG，因此兩個 SG 都必須明確列出。磁碟大小也要移入 Launch Template，不能保留 Node Group 的 `DiskSize`。
+
+### 5. 💰 專題省錢優化設計
 為了解決學術專題的預算考量，我們在模板中進行了以下優化：
 - **硬碟調降：** 從預設的 30GB 降低至 **20GB**，省下 EBS 儲存空間月租費。
 - **數量調降：** 初始與最少數量從 3 台調降至 **2 台**（能跨 2 個 AZ 通訊，省下 1/3 的 EC2 費用）。
@@ -26,9 +31,9 @@
 
 ---
 
-## 🛠️ 完整的 CloudFormation 藍圖
+## 🛠️ CloudFormation 核心結構摘要
 
-已寫入：`CloudFromation/nkc201-17-05-nodegroup-stack.yaml`
+可部署的完整版本以 `CloudFormation/nkc201-17-05-nodegroup-stack.yaml` 為準。
 
 ```yaml
 AWSTemplateFormatVersion: '2010-09-09'
@@ -81,14 +86,34 @@ Parameters:
   IamStackName:
     Type: String
     Default: nkc201-17-03-iam-stack
-    Description: Name of the IAM Stack to import Instance Profile
+    Description: Name of the IAM Stack to import Engineer Role ARN
 
   SecurityStackName:
     Type: String
     Default: nkc201-17-02-security-stack
     Description: Name of the Security Stack to import Node Security Group
 
+  ClusterStackName:
+    Type: String
+    Default: nkc201-17-04-eks-cluster-stack
+    Description: Name of the EKS Cluster Stack to import the EKS-managed Cluster Security Group
+
 Resources:
+  EksNodeLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        SecurityGroupIds:
+          - Fn::ImportValue: !Sub "${SecurityStackName}-EksNodeSecurityGroupId"
+          - Fn::ImportValue: !Sub "${ClusterStackName}-ClusterSecurityGroupId"
+        BlockDeviceMappings:
+          - DeviceName: /dev/xvda
+            Ebs:
+              VolumeSize: !Ref DiskSize
+              VolumeType: gp3
+              Encrypted: true
+              DeleteOnTermination: true
+
   EksNodeGroup:
     Type: AWS::EKS::Nodegroup
     Properties:
@@ -101,7 +126,9 @@ Resources:
         DesiredSize: !Ref DesiredSize
         MinSize: !Ref MinSize
         MaxSize: !Ref MaxSize
-      DiskSize: !Ref DiskSize
+      LaunchTemplate:
+        Id: !Ref EksNodeLaunchTemplate
+        Version: !GetAtt EksNodeLaunchTemplate.LatestVersionNumber
       AmiType: AL2023_x86_64_STANDARD # 使用 Amazon Linux 2023 (最新推薦的最佳實踐)
       Labels:
         role: worker
@@ -181,6 +208,10 @@ Resources:
 # Outputs
 # =========================================================================
 Outputs:
+  NodeLaunchTemplateId:
+    Description: Launch Template ID used by the EKS managed node group
+    Value: !Ref EksNodeLaunchTemplate
+
   NodegroupName:
     Description: The name of the EKS Node Group
     Value: !Ref EksNodeGroup
@@ -213,7 +244,7 @@ export AWS_PROFILE="nkc201-17-sso"
 # 2. 執行部署指令
 aws cloudformation create-stack \
   --stack-name nkc201-17-nodegroup \
-  --template-body file://CloudFromation/nkc201-17-05-nodegroup-stack.yaml \
+  --template-body file://CloudFormation/nkc201-17-05-nodegroup-stack.yaml \
   --parameters \
     ParameterKey=ClusterName,ParameterValue=eks-aiops-mumbai \
     ParameterKey=NodeRoleArn,ParameterValue=<您的EksNodeRoleArn> \
@@ -230,7 +261,7 @@ aws cloudformation create-stack \
 > # 2. 執行部署指令
 > aws cloudformation create-stack `
 >   --stack-name nkc201-17-nodegroup `
->   --template-body (Get-Content CloudFromation/nkc201-17-05-nodegroup-stack.yaml -Raw -Encoding UTF8) `
+>   --template-body (Get-Content CloudFormation/nkc201-17-05-nodegroup-stack.yaml -Raw -Encoding UTF8) `
 >   --parameters `
 >     ParameterKey=ClusterName,ParameterValue=eks-aiops-mumbai `
 >     ParameterKey=NodeRoleArn,ParameterValue=<您的EksNodeRoleArn> `

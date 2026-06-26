@@ -1,4 +1,4 @@
-# 02 Security Stack - 安全群組架構計畫
+﻿# 02 Security Stack - 安全群組架構計畫
 
 本計畫紀錄了 EKS 專題中的安全群組 (Security Group) 架構設計，並使用費曼學習法（比喻法）進行詳細說明，便於初學者理解與複習。
 
@@ -38,7 +38,7 @@
 
 ## 🛠️ 完整的 CloudFormation 藍圖
 
-已寫入：`CloudFromation/nkc201-17-02-security-stack.yaml`
+已寫入：`CloudFormation/nkc201-17-02-security-stack.yaml`
 
 ```yaml
 AWSTemplateFormatVersion: '2010-09-09'
@@ -217,7 +217,7 @@ aws ec2 describe-vpcs --query "Vpcs[*].{ID:VpcId,Name:Tags[?Key=='Name'].Value |
 ```bash
 aws cloudformation create-stack \
   --stack-name eks-aiops-security \
-  --template-body file://CloudFromation/nkc201-17-02-security-stack.yaml \
+  --template-body file://CloudFormation/nkc201-17-02-security-stack.yaml \
   --parameters ParameterKey=VpcId,ParameterValue=vpc-xxxxxx
 ```
 
@@ -231,6 +231,7 @@ aws cloudformation create-stack \
 > # 2. 建立 Stack
 > aws cloudformation create-stack `
 >   --stack-name eks-aiops-security `
->   --template-body file://CloudFromation/nkc201-17-02-security-stack.yaml `
+>   --template-body file://CloudFormation/nkc201-17-02-security-stack.yaml `
 >   --parameters ParameterKey=VpcId,ParameterValue=vpc-xxxxxx
 > ```
+

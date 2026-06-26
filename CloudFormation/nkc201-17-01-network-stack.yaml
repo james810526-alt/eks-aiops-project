@@ -1,0 +1,475 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: VPC Infrastructure for EKS practice in Mumbai region with proper subnets and conditional NAT Gateways
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: eks-aiops-demo
+    Description: Project name used for resource naming
+
+  VpcCidr:
+    Type: String
+    Default: 10.20.0.0/16
+    Description: CIDR block for VPC
+
+  NatGatewayMode:
+    Type: String
+    Default: Single
+    AllowedValues:
+      - None
+      - Single
+      - MultiAZ
+    Description: Select NAT Gateway deployment mode
+
+Conditions:
+  CreateSingleNAT: !Equals [ !Ref NatGatewayMode, Single ]
+  CreateMultiAzNAT: !Equals [ !Ref NatGatewayMode, MultiAZ ]
+  CreateAnyNAT: !Not [ !Equals [ !Ref NatGatewayMode, None ] ]
+  
+Resources:
+  # VPC
+  ProjectVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-vpc"
+        - Key: Project
+          Value: nkc201-17
+ 
+  # Internet Gateway
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-igw"
+        - Key: Project
+          Value: nkc201-17
+
+  AttachInternetGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref ProjectVPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # =========================================================================
+  # Subnets
+  # =========================================================================
+
+  # Availability Zone: ap-south-1a (Zone A)
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref ProjectVPC
+      CidrBlock: 10.20.0.0/24
+      AvailabilityZone: ap-south-1a
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-public-subnet-a-1"
+        - Key: kubernetes.io/role/elb
+          Value: "1"
+        - Key: kubernetes.io/cluster/eks-aiops-mumbai
+          Value: shared
+        - Key: Project
+          Value: "nkc201-17"
+            
+  PrivateAppSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref ProjectVPC
+      CidrBlock: 10.20.10.0/24
+      AvailabilityZone: ap-south-1a
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-private-app-subnet-a-4"
+        - Key: kubernetes.io/role/internal-elb
+          Value: "1"
+        - Key: kubernetes.io/cluster/eks-aiops-mumbai
+          Value: shared
+        - Key: Project
+          Value: "nkc201-17"            
+            
+  PrivateDataSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref ProjectVPC
+      CidrBlock: 10.20.20.0/24
+      AvailabilityZone: ap-south-1a
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-private-data-subnet-a-7"
+        - Key: Project
+          Value: "nkc201-17"
+            
+  # Availability Zone: ap-south-1b (Zone B)
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref ProjectVPC
+      CidrBlock: 10.20.1.0/24
+      AvailabilityZone: ap-south-1b
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-public-subnet-b-2"
+        - Key: kubernetes.io/role/elb
+          Value: "1"
+        - Key: kubernetes.io/cluster/eks-aiops-mumbai
+          Value: shared
+        - Key: Project
+          Value: "nkc201-17"
+            
+  PrivateAppSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref ProjectVPC
+      CidrBlock: 10.20.11.0/24
+      AvailabilityZone: ap-south-1b
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-private-app-subnet-b-5"
+        - Key: kubernetes.io/role/internal-elb
+          Value: "1"
+        - Key: kubernetes.io/cluster/eks-aiops-mumbai
+          Value: shared
+        - Key: Project
+          Value: "nkc201-17"      
+            
+  PrivateDataSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref ProjectVPC
+      CidrBlock: 10.20.21.0/24
+      AvailabilityZone: ap-south-1b
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-private-data-subnet-b-8"
+        - Key: Project
+          Value: "nkc201-17" 
+            
+  # Availability Zone: ap-south-1c (Zone C)
+  PublicSubnetC:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref ProjectVPC
+      CidrBlock: 10.20.2.0/24
+      AvailabilityZone: ap-south-1c
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-public-subnet-c-3"
+        - Key: kubernetes.io/role/elb
+          Value: "1"
+        - Key: kubernetes.io/cluster/eks-aiops-mumbai
+          Value: shared
+        - Key: Project
+          Value: "nkc201-17"
+            
+  PrivateAppSubnetC:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref ProjectVPC
+      CidrBlock: 10.20.12.0/24
+      AvailabilityZone: ap-south-1c
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-private-app-subnet-c-6"
+        - Key: kubernetes.io/role/internal-elb
+          Value: "1"
+        - Key: kubernetes.io/cluster/eks-aiops-mumbai
+          Value: shared
+        - Key: Project
+          Value: "nkc201-17"     
+            
+  PrivateDataSubnetC:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref ProjectVPC
+      CidrBlock: 10.20.22.0/24
+      AvailabilityZone: ap-south-1c
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-private-data-subnet-c-9"
+        - Key: Project
+          Value: "nkc201-17"      
+
+  # =========================================================================
+  # NAT Gateways
+  # =========================================================================
+  NatGatewayEipA:
+    Type: AWS::EC2::EIP
+    Condition: CreateAnyNAT
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-nat-eip-a"
+        - Key: Project
+          Value: "nkc201-17"
+
+  NatGatewayA:
+    Type: AWS::EC2::NatGateway
+    Condition: CreateAnyNAT
+    Properties:
+      AllocationId: !GetAtt NatGatewayEipA.AllocationId
+      SubnetId: !Ref PublicSubnetA
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-nat-a"
+        - Key: Project
+          Value: "nkc201-17"
+          
+  NatGatewayEipB:
+    Type: AWS::EC2::EIP
+    Condition: CreateMultiAzNAT
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-nat-eip-b"
+        - Key: Project
+          Value: "nkc201-17"
+
+  NatGatewayB:
+    Type: AWS::EC2::NatGateway
+    Condition: CreateMultiAzNAT
+    Properties:
+      AllocationId: !GetAtt NatGatewayEipB.AllocationId
+      SubnetId: !Ref PublicSubnetB
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-nat-b"
+        - Key: Project
+          Value: "nkc201-17"
+          
+  NatGatewayEipC:
+    Type: AWS::EC2::EIP
+    Condition: CreateMultiAzNAT
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-nat-eip-c"
+        - Key: Project
+          Value: "nkc201-17"
+
+  NatGatewayC:
+    Type: AWS::EC2::NatGateway
+    Condition: CreateMultiAzNAT
+    Properties:
+      AllocationId: !GetAtt NatGatewayEipC.AllocationId
+      SubnetId: !Ref PublicSubnetC
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-nat-c"
+        - Key: Project
+          Value: "nkc201-17"
+
+  # =========================================================================
+  # Route Tables
+  # =========================================================================
+
+  # Public Route Table
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref ProjectVPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-public-rt"
+        - Key: Project
+          Value: "nkc201-17"
+
+  PublicInternetRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachInternetGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  # Private Route Tables for App Subnets (Split to support Multi-AZ NAT Routing)
+  PrivateAppRouteTableA:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref ProjectVPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-private-app-rt-a"
+        - Key: Project
+          Value: "nkc201-17"
+
+  PrivateRouteA:
+    Type: AWS::EC2::Route
+    Condition: CreateAnyNAT
+    Properties:
+      RouteTableId: !Ref PrivateAppRouteTableA
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGatewayA
+
+  PrivateAppRouteTableB:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref ProjectVPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-private-app-rt-b"
+        - Key: Project
+          Value: "nkc201-17"
+
+  PrivateRouteB:
+    Type: AWS::EC2::Route
+    Condition: CreateAnyNAT
+    Properties:
+      RouteTableId: !Ref PrivateAppRouteTableB
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !If [ CreateMultiAzNAT, !Ref NatGatewayB, !Ref NatGatewayA ]
+
+  PrivateAppRouteTableC:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref ProjectVPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-private-app-rt-c"
+        - Key: Project
+          Value: "nkc201-17"
+
+  PrivateRouteC:
+    Type: AWS::EC2::Route
+    Condition: CreateAnyNAT
+    Properties:
+      RouteTableId: !Ref PrivateAppRouteTableC
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !If [ CreateMultiAzNAT, !Ref NatGatewayC, !Ref NatGatewayA ]
+
+  # Isolated Route Table for Data Subnets
+  PrivateDataRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref ProjectVPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-private-data-rt"
+        - Key: Project
+          Value: "nkc201-17"
+
+  # =========================================================================
+  # Route Table Associations
+  # =========================================================================
+
+  # Public Subnets Associations
+  PublicSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetA
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnetBRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetB
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnetCRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetC
+      RouteTableId: !Ref PublicRouteTable
+
+  # Private App Subnets Associations
+  PrivateAppSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateAppSubnetA
+      RouteTableId: !Ref PrivateAppRouteTableA
+
+  PrivateAppSubnetBRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateAppSubnetB
+      RouteTableId: !Ref PrivateAppRouteTableB
+
+  PrivateAppSubnetCRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateAppSubnetC
+      RouteTableId: !Ref PrivateAppRouteTableC
+
+  # Private Data Subnets Associations (Isolated)
+  PrivateDataSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateDataSubnetA
+      RouteTableId: !Ref PrivateDataRouteTable
+
+  PrivateDataSubnetBRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateDataSubnetB
+      RouteTableId: !Ref PrivateDataRouteTable
+
+  PrivateDataSubnetCRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateDataSubnetC
+      RouteTableId: !Ref PrivateDataRouteTable
+
+# =========================================================================
+# Outputs
+# =========================================================================
+Outputs:
+  VpcId:
+    Description: Created VPC ID
+    Value: !Ref ProjectVPC
+    
+  VpcCidr:
+    Description: CIDR block for VPC
+    Value: !Ref VpcCidr
+    
+  PublicSubnetAId:
+    Description: Public Subnet A ID
+    Value: !Ref PublicSubnetA
+
+  PublicSubnetBId:
+    Description: Public Subnet B ID
+    Value: !Ref PublicSubnetB
+
+  PublicSubnetCId:
+    Description: Public Subnet C ID
+    Value: !Ref PublicSubnetC
+
+  PrivateAppSubnetAId:
+    Description: Private App Subnet A ID
+    Value: !Ref PrivateAppSubnetA
+
+  PrivateAppSubnetBId:
+    Description: Private App Subnet B ID
+    Value: !Ref PrivateAppSubnetB
+
+  PrivateAppSubnetCId:
+    Description: Private App Subnet C ID
+    Value: !Ref PrivateAppSubnetC
+
+  PrivateDataSubnetAId:
+    Description: Private Data Subnet A ID
+    Value: !Ref PrivateDataSubnetA
+
+  PrivateDataSubnetBId:
+    Description: Private Data Subnet B ID
+    Value: !Ref PrivateDataSubnetB
+
+  PrivateDataSubnetCId:
+    Description: Private Data Subnet C ID
+    Value: !Ref PrivateDataSubnetC

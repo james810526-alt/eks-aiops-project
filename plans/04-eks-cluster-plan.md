@@ -1,4 +1,4 @@
-# 04 EKS Cluster Stack - EKS 叢集大腦建置計畫
+﻿# 04 EKS Cluster Stack - EKS 叢集大腦建置計畫
 
 本計畫紀錄了 EKS 智能維運專題中 K8s 控制面大腦（Control Plane）的建置規劃與四大核心外掛套件安裝，方便導入 Obsidian 閱讀與複習。
 
@@ -19,7 +19,7 @@
 
 ## 🛠️ 完整的 CloudFormation 藍圖
 
-已寫入：`CloudFromation/nkc201-17-04-eks-cluster-stack.yaml`
+已寫入：`CloudFormation/nkc201-17-04-eks-cluster-stack.yaml`
 
 ```yaml
 AWSTemplateFormatVersion: '2010-09-09'
@@ -132,7 +132,7 @@ Outputs:
 ```bash
 aws cloudformation create-stack \
   --stack-name eks-aiops-cluster \
-  --template-body file://CloudFromation/nkc201-17-04-eks-cluster-stack.yaml \
+  --template-body file://CloudFormation/nkc201-17-04-eks-cluster-stack.yaml \
   --parameters \
     ParameterKey=EksClusterRoleArn,ParameterValue=arn:aws:iam::您的帳號:role/eks-aiops-demo-eks-cluster-role \
     ParameterKey=SecurityGroupIds,ParameterValue=sg-您的安全群組ID \
@@ -146,9 +146,10 @@ aws cloudformation create-stack \
 > ```powershell
 > aws cloudformation create-stack `
 >   --stack-name eks-aiops-cluster `
->   --template-body file://CloudFromation/nkc201-17-04-eks-cluster-stack.yaml `
+>   --template-body file://CloudFormation/nkc201-17-04-eks-cluster-stack.yaml `
 >   --parameters `
 >     ParameterKey=EksClusterRoleArn,ParameterValue=arn:aws:iam::您的帳號:role/eks-aiops-demo-eks-cluster-role `
 >     ParameterKey=SecurityGroupIds,ParameterValue=sg-您的安全群組ID `
 >     ParameterKey=SubnetIds=subnet-A區ID`,subnet-B區ID`,subnet-C區ID
 > ```
+

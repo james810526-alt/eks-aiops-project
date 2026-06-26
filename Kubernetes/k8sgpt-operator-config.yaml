@@ -34,15 +34,17 @@ spec:
     enabled: true
     backend: amazonbedrock
     model: anthropic.claude-3-haiku-20240307-v1:0
-    secret:
-      # AWS Bedrock 採用 Pod Identity IAM Role 授權，無需填寫靜態 secrets 金鑰，保留空 Secret 或預設即可
-      name: ""
-      key: ""
-  
-  # 2. 指定運行的 ServiceAccount (對應 Stack 07 的 Pod Identity 綁定)
-  serviceAccountName: k8sgpt-sa
+    region: ap-south-1
+
+  # 2. AWS Bedrock 採用 Pod Identity IAM Role 授權，因此不填寫靜態 Access Key Secret。
+  # 注意：目前 K8sGPT CRD 不支援 spec.serviceAccountName，需由 Operator 產生的工作負載
+  # ServiceAccount 再對接 Pod Identity。
 
   # 3. 設置過濾器 (只針對核心元件進行掃描以收斂噪音)
+  # 需明確指定 K8sGPT image 版本，避免 Operator 產生缺少 tag 的映像名稱而造成 InvalidImageName。
+  repository: ghcr.io/k8sgpt-ai/k8sgpt
+  version: v0.4.32
+
   filters:
     - Pod
     - Service
@@ -51,7 +53,7 @@ spec:
 
   # 4. 設置 Webhook Sink (自動將偵測到的異常傳送至 API Gateway Webhook 觸發自動修復)
   sink:
-    type: webhook
+    type: cloudevents
     # 引用上方 Secret 的 URL，確保敏感的端點不被明文寫入 YAML 中
     secret:
       name: k8sgpt-webhook-secret

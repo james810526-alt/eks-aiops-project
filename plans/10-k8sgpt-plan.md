@@ -57,17 +57,29 @@
 ### 步驟 1：登入 SSM 跳板機
 在您本地電腦的 PowerShell 中執行（請將 `<BastionInstanceId>` 替換為 Stack 05 輸出的 ID）：
 ```powershell
-$env:AWS_PROFILE="nkc201-17-sso"
-aws ssm start-session --target <BastionInstanceId>
+aws ssm start-session `
+  --target <BastionInstanceId> `
+  --region ap-south-1 `
+  --profile nkc201-17-sso
 ```
 進入跳板機後，執行以下指令以連線配對 EKS：
 ```bash
-aws eks update-kubeconfig --region ap-south-1 --name eks-aiops-mumbai
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+ENGINEER_ROLE_ARN="arn:aws:iam::${ACCOUNT_ID}:role/eks-aiops-demo-engineer-role"
+
+aws eks update-kubeconfig \
+  --region ap-south-1 \
+  --name eks-aiops-mumbai \
+  --assume-role-arn "$ENGINEER_ROLE_ARN" \
+  --role-arn "$ENGINEER_ROLE_ARN"
 ```
 
 ### 步驟 2：使用 Helm 安裝 K8sGPT Operator
 在跳板機終端機中執行：
 ```bash
+# 若是新 SSM session，先確認 kubectl 路徑
+export PATH=$HOME/bin:$PATH
+
 # 1. 新增 K8sGPT Helm 倉庫
 helm repo add k8sgpt https://charts.k8sgpt.ai/
 helm repo update
@@ -77,11 +89,15 @@ helm install k8sgpt-operator k8sgpt/k8sgpt-operator   --namespace aiops   --crea
 ```
 
 ### 步驟 3：部署 web-demo 監控目標
-將 `Kubernetes/web-prod-app.yaml` 檔案內容上傳至跳板機（或在跳板機中以 `vi web-prod-app.yaml` 建立），並套用：
+將 `Kubernetes/web-prod-app.yaml` 與 `Kubernetes/deploy-web-prod.sh` 上傳至跳板機同一目錄。從 Stack 02 Output 取得 `AlbSecurityGroupId`，由腳本驗證並注入 Ingress 後再套用：
 ```bash
-kubectl apply -f web-prod-app.yaml
+chmod +x deploy-web-prod.sh
+./deploy-web-prod.sh sg-xxxxxxxxxxxxxxxxx apply
 ```
 * **驗證**：執行 `kubectl get pods -n web-prod`，確認有 3 個 `web-demo` Pod 處於 `Running` 狀態，且 ALB Ingress 已順利建立。
+
+> [!NOTE]
+> web-demo 使用 `ingressClassName: alb`。最新版 `Kubernetes/web-prod-app.yaml` 已包含 `IngressClass/alb`，controller 為 `ingress.k8s.aws/alb`。若缺少此物件，K8sGPT 會產生 `ingress class alb does not exist` 的診斷結果。
 
 ### 步驟 4：設定 K8sGPT 與 Webhook 對接
 1. 查詢您的 API Gateway 網址（可由 Stack 08 輸出取得，如 `https://a1b2c3d4.execute-api.ap-south-1.amazonaws.com`）。
@@ -91,6 +107,14 @@ kubectl apply -f web-prod-app.yaml
 kubectl apply -f k8sgpt-operator-config.yaml
 ```
 * **驗證**：執行 `kubectl get pods -n aiops`，確認 K8sGPT Operator 運行正常。
+
+> [!IMPORTANT]
+> 最新版 `k8sgpt-operator-config.yaml` 需保留以下設計：
+> - 不使用 `spec.serviceAccountName`，因 K8sGPT CRD `v1alpha1` 不支援該欄位。
+> - 明確指定 `repository: ghcr.io/k8sgpt-ai/k8sgpt` 與 `version: v0.4.32`，避免新 Pod 出現 `InvalidImageName`。
+> - Sink 使用 `type: cloudevents`。
+> - Pod Identity 綁定的是 Operator 實際產生的 ServiceAccount `aiops/k8sgpt-aiops`，不是舊版規劃中的 `k8sgpt-sa`。
+> - Anthropic Claude 3 Haiku 首次使用前需在 Bedrock Console 提交 use case details。
 
 ---
 
@@ -122,7 +146,21 @@ kubectl patch svc web-demo-service -n web-prod -p '{"spec":{"selector":{"app":"w
 
 ## 🔒 資安設計防護亮點
 
-1. **Pod Identity 凭證不落地**：K8sGPT Operator 的 Pod 不需要設定 AWS IAM 永久金鑰（如 AccessKey），而是直接借用 ServiceAccount `k8sgpt-sa` 被 AWS 授權的臨時憑證，安全防護力達到 AWS 生產級標準。
+1. **Pod Identity 凭證不落地**：K8sGPT Operator 的 Pod 不需要設定 AWS IAM 永久金鑰（如 AccessKey），而是直接借用 ServiceAccount `k8sgpt-aiops` 被 AWS 授權的臨時憑證，安全防護力達到 AWS 生產級標準。
 2. **過濾器精確收斂**：在 `k8sgpt-operator-config.yaml` 中，我們限制了掃描器只關注 `Pod`、`Service` , `Ingress` 與 `ReplicaSet`。這能有效過濾掉無關的 K8s 系統內部事件，避免產生不必要的 AWS Bedrock API 呼叫額度浪費。
 3. **Webhook 加密保護**：Webhook 的目標 API 網址儲存在 Kubernetes `Secret` 內，在 Pod 中運行時動態載入，防止內部設定檔外流時暴露對外接口端點。
 4. **Webhook 安全權限 Token 驗證**：在對外的 `/webhook` 端點引進密鑰查驗機制（查詢參數須包含 `token=eks-aiops-webhook-secret-token`），Lambda 才會受理並調用 Bedrock，藉此杜絕未授權的虛假告警請求，防範 API 遭騷擾與費用濫用。
+
+---
+
+## ✅ 2026-06-26 實測除錯重點
+
+| 問題 | 現象 | 修正 |
+|---|---|---|
+| SSM 連線區域錯誤 | `TargetNotConnected` | `aws ssm start-session` 明確加上 `--region ap-south-1` |
+| Bastion 缺 kubectl | `kubectl: command not found` | 下載 v1.34.0 到 `$HOME/bin` 並 `export PATH=$HOME/bin:$PATH` |
+| K8sGPT CRD 欄位錯誤 | `unknown field "spec.serviceAccountName"` | 移除該欄位，改由 EKS Pod Identity association 綁實際 ServiceAccount |
+| Bedrock 權限錯誤 | log 顯示 `eks-node-role` 無 `bedrock:InvokeModel` | Stack07 將 `K8sGptRoleArn` 綁到 `aiops/k8sgpt-aiops` |
+| K8sGPT Pod 起不來 | `InvalidImageName` | 在 K8sGPT CR 加上 `repository` 與 `version: v0.4.32` |
+| Bedrock 模型未啟用 | `Model use case details have not been submitted` | 到 Bedrock Claude 3 Haiku 頁面送出 use case details |
+| K8sGPT 報 IngressClass | `ingress class alb does not exist` | 建立 `IngressClass/alb`，controller 為 `ingress.k8s.aws/alb` |

@@ -17,7 +17,7 @@
 * **專案網址**：https://github.com/james810526-alt/eks-aiops-project
 * **目標 AWS 區域**：`ap-south-1` (印度孟買)
 * **請執行以下前置步驟**：
-  1. 請分析此倉庫中的 CloudFormation 模板（位於 `CloudFromation/` 資料夾）及架構計畫書（位於 `plans/` 資料夾）。
+  1. 請分析此倉庫中的 CloudFormation 模板（位於 `CloudFormation/` 資料夾）及架構計畫書（位於 `plans/` 資料夾）。
   2. 對所有 YAML 範本進行**語法正確性檢驗**。
   3. 對整體 CloudFormation 堆疊（Stack 01 至 Stack 08）進行**部署依賴性與邏輯流暢度審查**。
 
@@ -42,15 +42,26 @@
   - **RDS MySQL (db.t3.micro)**：啟用 `StorageEncrypted: true`（使用預設免費的 aws/rds KMS 金鑰）。啟用自動備份 `BackupRetentionPeriod: 7`。
   - **清理原則（刻意不設定）**：為避免展示用資料庫在 Stack 刪除時留下殘留快照導致額外計費，`DeletionPolicy` 設定為 `Delete`，且不開啟自動密碼輪替與 KMS CMK。
 * **Stack 07 Access**：
-  - **EKS Access Entry**：將 Engineer Role 映射為命名空間 `web-prod` 與 `aiops` 的管理員 (`AmazonEKSAdminPolicy`) 以及全叢集唯讀 (`AmazonEKSViewerPolicy`)。
+  - **EKS Access Entry**：將 Engineer Role 映射為命名空間 `web-prod` 與 `aiops` 的管理員 (`AmazonEKSAdminPolicy`) 以及全叢集唯讀 (`AmazonEKSViewPolicy`)。
   - **CI/CD 爆炸半徑限制**：將 CodeBuild Role 在 EKS 的權限由原本的 Cluster-wide 叢集超管，**縮減為僅在命名空間 `web-prod` 與 `aiops` 中擁有 `AmazonEKSAdminPolicy`**，保護 `kube-system` 等核心空間。
   - **Pod Identity Associations**：宣告三組綁定，正式將 K8s ServiceAccounts 與 AWS IAM Roles 對接連線。
+  - **K8sGPT Pod Identity 實測修正**：K8sGPT 掃描器實際使用 ServiceAccount `aiops/k8sgpt-aiops`，因此 `K8sGptRoleArn` 必須綁到 `k8sgpt-aiops`，不能綁到未被使用的 `k8sgpt-sa`。
 * **Stack 08 AIOps**：宣告智能維運告警元件。
   - **告警廣播**：透過 Amazon SNS 發送電子郵件告警至工程師信箱（james810526@gmail.com）。
   - **防風暴快取**：宣告 DynamoDB 表作為告警冷卻快取，透過 TTL 設置 10 分鐘冷卻期以過濾重複的警報。
   - **運算核心**：使用 Python Lambda 運行於 VPC 私有子網路並套用 Node SG，實現內網安全通訊與 API 調用。Lambda 整合 Bedrock LLM 進行白話中文診斷與修復建議生成。
+  - **報告輸出限制**：Lambda Bedrock prompt 應要求繁體中文回應，診斷報告約 600 個中文字內，並將 `max_tokens` 控制在 `700` 左右以降低不必要 token 消耗。
+  - **Lambda 併發設定**：不得保留 `ReservedConcurrentExecutions: 2`，避免帳號最低未保留併發限制導致 `AioOpsHandler CREATE_FAILED`。
   - **對外入口**：使用 API Gateway 曝露 `/webhook`, `/approve`, 與 `/reject` 路由，實現 Webhook 接收與工程師點擊核准的互動入口。
   - **安全修復**：使用 AWS CodeBuild 作為維修機器人，同樣部署在 VPC 私有子網路，於接收到工程師核准指令後扮演 IAM 角色安全地以 `kubectl` 連線私有 EKS 進行修復。
+
+* **Day 10 / K8sGPT 實測驗證**：
+  - K8sGPT CR 不應包含 `spec.serviceAccountName`。
+  - K8sGPT CR 需固定 `repository: ghcr.io/k8sgpt-ai/k8sgpt` 與 `version: v0.4.32`，避免 `InvalidImageName`。
+  - Sink 使用 `cloudevents`，Webhook URL 由 Kubernetes Secret 提供，並帶上 `token=eks-aiops-webhook-secret-token`。
+  - Bedrock Claude 3 Haiku 首次使用前需提交 Anthropic use case details。
+  - web-demo 需包含 `IngressClass/alb`，controller 為 `ingress.k8s.aws/alb`。
+  - 最終應確認 `kubectl get results -n aiops` 無非預期異常，K8sGPT log 不含 `AccessDenied`、`InvalidImageName`、`Model use case details`。
 
 ---
 
@@ -138,3 +149,4 @@
    * 如何在低成本（專題展示）與高安全性之間取得最佳平衡點？
    * 評估我們實作的 **08 AIOps Stack**（包括 DynamoDB 快取去重、Bedrock LLM 診斷、API Gateway 對外入口、CodeBuild 內網修復）的整體架構合理性，並提供後續的優化方向（例如後續要串接 LINE API 或是 Secrets Manager 密鑰防護的整合建議）。
 ```
+

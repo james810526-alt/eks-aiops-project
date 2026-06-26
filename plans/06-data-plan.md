@@ -1,4 +1,4 @@
-# 06 Data Stack - 資料層建置計畫
+﻿# 06 Data Stack - 資料層建置計畫
 
 本計畫紀錄了 EKS 智能維運專題中資料儲存層（包含 S3、RDS MySQL、Secrets Manager）的建置規劃與安全認證設計，方便導入 Obsidian 閱讀與複習。
 
@@ -22,7 +22,7 @@
 
 ## 🛠️ 完整的 CloudFormation 藍圖
 
-已寫入：`CloudFromation/nkc201-17-06-data-stack.yaml`
+已寫入：`CloudFormation/nkc201-17-06-data-stack.yaml`
 
 ```yaml
 AWSTemplateFormatVersion: '2010-09-09'
@@ -171,7 +171,7 @@ export AWS_PROFILE="nkc201-17-sso"
 # 2. 執行部署指令
 aws cloudformation create-stack \
   --stack-name nkc201-17-data \
-  --template-body file://CloudFromation/nkc201-17-06-data-stack.yaml \
+  --template-body file://CloudFormation/nkc201-17-06-data-stack.yaml \
   --parameters \
     ParameterKey=VpcId,ParameterValue=<您的VpcId，如 vpc-00f9f872d1cede59e> \
     ParameterKey=RdsSecurityGroupId,ParameterValue=<您的RdsSecurityGroupId，如 sg-xxxxxx> \
@@ -189,7 +189,7 @@ aws cloudformation create-stack \
 > # 2. 執行部署指令
 > aws cloudformation create-stack `
 >   --stack-name nkc201-17-data `
->   --template-body (Get-Content CloudFromation/nkc201-17-06-data-stack.yaml -Raw -Encoding UTF8) `
+>   --template-body (Get-Content CloudFormation/nkc201-17-06-data-stack.yaml -Raw -Encoding UTF8) `
 >   --parameters `
 >     ParameterKey=VpcId,ParameterValue=<您的VpcId，如 vpc-00f9f872d1cede59e> `
 >     ParameterKey=RdsSecurityGroupId,ParameterValue=<您的RdsSecurityGroupId，如 sg-xxxxxx> `
@@ -241,3 +241,4 @@ aws secretsmanager get-secret-value --secret-id eks-aiops-demo-rds-secret --quer
    利用 SSM Agent，在您的本地電腦與私有子網路的節點間建立一條臨時的加密隧道，將本地的 `3306` 埠口對接到遠端 RDS 的 `3306` 埠口。這樣您就能在本地用 DBeaver 或 MySQL Workbench 連線 `localhost:3306` 來操作遠端資料庫！
 2. **跳板機 (Bastion Host)：**
    在公有子網路建一台微型的 EC2 跳板機，工程師先登入跳板機，再從跳板機連線進 RDS。
+

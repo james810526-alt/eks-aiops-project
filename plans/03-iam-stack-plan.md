@@ -53,9 +53,9 @@ AWS 的 **IAM（身分與存取管理）** 就像是這家自動化大工廠的 
 
 ---
 
-## 🛠️ 完整的 CloudFormation 藍圖
+## 🛠️ CloudFormation 核心結構摘要
 
-已寫入：`CloudFromation/nkc201-17-03-iam-stack.yaml`
+可部署的完整版本以 `CloudFormation/nkc201-17-03-iam-stack.yaml` 為準。ALB Controller policy 較長，不在計畫文件重複維護，避免與官方版本漂移。
 
 ```yaml
 AWSTemplateFormatVersion: '2010-09-09'
@@ -118,106 +118,23 @@ Resources:
       Roles:
         - !Ref EksNodeRole
 
-  # 3. ALB Controller Role
+  # 3. ALB Controller resources are pinned to controller/chart v3.4.0.
+  # The complete official policy is embedded in the deployable template.
+  AlbControllerManagedPolicy:
+    Type: AWS::IAM::ManagedPolicy
+
   AlbControllerRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "${ProjectName}-alb-controller-role"
       AssumeRolePolicyDocument:
-        Version: '2012-10-17'
         Statement:
-          - Effect: Allow
-            Principal:
+          - Principal:
               Service: pods.eks.amazonaws.com
-            Action: 
+            Action:
               - sts:AssumeRole
               - sts:TagSession
-      Policies:
-        - PolicyName: EKSALBControllerPolicy
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - iam:CreateServiceLinkedRole
-                Resource: '*'
-                Condition:
-                  StringEquals:
-                    iam:AWSServiceName: elasticloadbalancing.amazonaws.com
-              - Effect: Allow
-                Action:
-                  - ec2:DescribeAccountAttributes
-                  - ec2:DescribeAddresses
-                  - ec2:DescribeAvailabilityZones
-                  - ec2:DescribeInternetGateways
-                  - ec2:DescribeVpcs
-                  - ec2:DescribeSubnets
-                  - ec2:DescribeSecurityGroups
-                  - ec2:DescribeInstances
-                  - ec2:DescribeNetworkInterfaces
-                  - ec2:DescribeTags
-                  - ec2:GetCoipPoolUsage
-                  - ec2:DescribeCoipPools
-                  - elasticloadbalancing:DescribeLoadBalancers
-                  - elasticloadbalancing:DescribeLoadBalancerAttributes
-                  - elasticloadbalancing:DescribeListeners
-                  - elasticloadbalancing:DescribeListenerAttributes
-                  - elasticloadbalancing:DescribeRules
-                  - elasticloadbalancing:DescribeTargetGroups
-                  - elasticloadbalancing:DescribeTargetGroupAttributes
-                  - elasticloadbalancing:DescribeTargetHealth
-                  - elasticloadbalancing:DescribeTags
-                  - cognito-idp:DescribeUserPoolClient
-                  - acm:ListCertificates
-                  - acm:DescribeCertificate
-                  - iam:ListServerCertificates
-                  - iam:GetServerCertificate
-                  - waf-regional:GetWebACL
-                  - waf-regional:GetWebACLForResource
-                  - waf-regional:AssociateWebACL
-                  - waf-regional:DisassociateWebACL
-                  - wafv2:GetWebACL
-                  - wafv2:GetWebACLForResource
-                  - wafv2:AssociateWebACL
-                  - wafv2:DisassociateWebACL
-                  - shield:GetSubscriptionState
-                  - shield:DescribeProtection
-                  - shield:CreateProtection
-                  - shield:DeleteProtection
-                Resource: '*'
-              - Effect: Allow
-                Action:
-                  - ec2:AuthorizeSecurityGroupIngress
-                  - ec2:RevokeSecurityGroupIngress
-                  - ec2:CreateSecurityGroup
-                  - ec2:DeleteSecurityGroup
-                Resource: '*'
-              - Effect: Allow
-                Action:
-                  - elasticloadbalancing:CreateLoadBalancer
-                  - elasticloadbalancing:CreateTargetGroup
-                  - elasticloadbalancing:CreateListener
-                  - elasticloadbalancing:DeleteLoadBalancer
-                  - elasticloadbalancing:DeleteTargetGroup
-                  - elasticloadbalancing:DeleteListener
-                  - elasticloadbalancing:ModifyLoadBalancerAttributes
-                  - elasticloadbalancing:ModifyTargetGroup
-                  - elasticloadbalancing:ModifyTargetGroupAttributes
-                  - elasticloadbalancing:SetIpAddressType
-                  - elasticloadbalancing:SetSecurityGroups
-                  - elasticloadbalancing:SetSubnets
-                  - elasticloadbalancing:RegisterTargets
-                  - elasticloadbalancing:DeregisterTargets
-                  - elasticloadbalancing:CreateRule
-                  - elasticloadbalancing:DeleteRule
-                  - elasticloadbalancing:ModifyListener
-                  - elasticloadbalancing:ModifyRule
-                Resource: '*'
-      Tags:
-        - Key: Name
-          Value: !Sub "${ProjectName}-alb-controller-role"
-        - Key: Project
-          Value: nkc201-17
+      ManagedPolicyArns:
+        - !Ref AlbControllerManagedPolicy
 
   # 4. App S3 Role
   AppS3Role:
@@ -406,6 +323,10 @@ Outputs:
     Description: ARN for ALB Controller Role
     Value: !GetAtt AlbControllerRole.Arn
 
+  AlbControllerManagedPolicyArn:
+    Description: ARN for the AWS Load Balancer Controller v3.4.0 managed policy
+    Value: !Ref AlbControllerManagedPolicy
+
   AppS3RoleArn:
     Description: ARN for App S3 Role
     Value: !GetAtt AppS3Role.Arn
@@ -432,7 +353,7 @@ Outputs:
 ```bash
 aws cloudformation create-stack \
   --stack-name eks-aiops-iam \
-  --template-body file://CloudFromation/nkc201-17-03-iam-stack.yaml \
+  --template-body file://CloudFormation/nkc201-17-03-iam-stack.yaml \
   --capabilities CAPABILITY_NAMED_IAM
 ```
 
@@ -442,7 +363,7 @@ aws cloudformation create-stack \
 > ```powershell
 > aws cloudformation create-stack `
 >   --stack-name eks-aiops-iam `
->   --template-body file://CloudFromation/nkc201-17-03-iam-stack.yaml `
+>   --template-body file://CloudFormation/nkc201-17-03-iam-stack.yaml `
 >   --capabilities CAPABILITY_NAMED_IAM
 > ```
 

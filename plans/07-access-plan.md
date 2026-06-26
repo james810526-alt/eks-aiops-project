@@ -34,7 +34,7 @@
 * **晶片卡權限：** **特定房間通行證 + 大廳通行證**
 * **K8s 內部權限對應：**
   * **在 `web-prod` 與 `aiops` 命名空間 (Namespace) 中：** 擁有 `AmazonEKSAdminPolicy`（系統管理員權限）。可以自由地建立、刪除、修改這兩個命名空間內的所有 Pod、Deployment 與 Service。這就像是工程師在自己的專案辦公室裡擁有最高使用權。
-  * **在整個叢集級別 (Cluster-wide)：** 擁有 `AmazonEKSViewerPolicy`（唯讀權限）。不能隨意修改大樓結構，但可以走到大廳看一看（查看 Node 狀態、Storage 資訊等），便於排查整體環境問題，同時避免不小心刪除系統核心組件（如 `kube-system` 命名空間下的網路外掛）。
+  * **在整個叢集級別 (Cluster-wide)：** 擁有 `AmazonEKSViewPolicy`（唯讀權限）。不能隨意修改大樓結構，但可以走到大廳看一看（查看 Node 狀態、Storage 資訊等），便於排查整體環境問題，同時避免不小心刪除系統核心組件（如 `kube-system` 命名空間下的網路外掛）。
 
 ### 2. 🤖 自動化修復機器人 (`CodeBuildRole`)
 * **晶片卡權限：** **特定房間通行證**
@@ -45,7 +45,16 @@
 
 ## 🛠️ 完整的 CloudFormation 藍圖
 
-已寫入：`CloudFromation/nkc201-17-07-access-stack.yaml`
+已寫入：`CloudFormation/nkc201-17-07-access-stack.yaml`
+
+> [!IMPORTANT]
+> **2026-06-26 實作更新**
+> 最新範本除了 Engineer / CodeBuild Access Entry，也包含三組 EKS Pod Identity Association：
+> - `kube-system/aws-load-balancer-controller` -> `AlbControllerRoleArn`
+> - `web-prod/web-app-sa` -> `AppS3RoleArn`
+> - `aiops/k8sgpt-aiops` -> `K8sGptRoleArn`
+>
+> K8sGPT Operator 實際產生的掃描器 Deployment 使用 ServiceAccount `k8sgpt-aiops`，不是早期規劃中的 `k8sgpt-sa`。若仍綁到 `k8sgpt-sa`，K8sGPT Pod 會退回使用 `eks-node-role` 呼叫 Bedrock，並出現 `bedrock:InvokeModel AccessDenied`。
 
 ```yaml
 AWSTemplateFormatVersion: '2010-09-09'
@@ -89,7 +98,7 @@ Resources:
               - web-prod
               - aiops
         # 1.2 在整個叢集級別擁有唯讀 (Viewer) 權限，便於查看 Node 狀態
-        - PolicyArn: arn:aws:eks::aws:cluster-access-policy/AmazonEKSViewerPolicy
+        - PolicyArn: arn:aws:eks::aws:cluster-access-policy/AmazonEKSViewPolicy
           AccessScope:
             Type: cluster
       Tags:
@@ -153,7 +162,7 @@ export AWS_PROFILE="nkc201-17-sso"
 # 2. 執行部署指令
 aws cloudformation create-stack \
   --stack-name nkc201-17-07-access-stack \
-  --template-body file://CloudFromation/nkc201-17-07-access-stack.yaml \
+  --template-body file://CloudFormation/nkc201-17-07-access-stack.yaml \
   --parameters \
     ParameterKey=ClusterStackName,ParameterValue=nkc201-17-04-eks-cluster-stack \
     ParameterKey=IamStackName,ParameterValue=nkc201-17-03-iam-stack
@@ -168,7 +177,7 @@ aws cloudformation create-stack \
 > # 2. 執行部署指令
 > aws cloudformation create-stack `
 >   --stack-name nkc201-17-07-access-stack `
->   --template-body (Get-Content CloudFromation/nkc201-17-07-access-stack.yaml -Raw -Encoding UTF8) `
+>   --template-body (Get-Content CloudFormation/nkc201-17-07-access-stack.yaml -Raw -Encoding UTF8) `
 >   --parameters `
 >     ParameterKey=ClusterStackName,ParameterValue=nkc201-17-04-eks-cluster-stack `
 >     ParameterKey=IamStackName,ParameterValue=nkc201-17-03-iam-stack `
@@ -208,4 +217,16 @@ aws eks list-associated-access-policies \
 >   --profile nkc201-17-sso
 > ```
 
-* **預期結果：** 會列出 `AmazonEKSAdminPolicy` (限 namespace `web-prod`, `aiops`) 以及 `AmazonEKSViewerPolicy` (全叢集)。
+* **預期結果：** 會列出 `AmazonEKSAdminPolicy` (限 namespace `web-prod`, `aiops`) 以及 `AmazonEKSViewPolicy` (全叢集)。
+
+### 3. 驗證 K8sGPT Pod Identity Association
+```bash
+aws eks list-pod-identity-associations \
+  --cluster-name eks-aiops-mumbai \
+  --namespace aiops \
+  --service-account k8sgpt-aiops \
+  --region ap-south-1 \
+  --profile nkc201-17-sso
+```
+
+* **預期結果：** 會看到 `serviceAccount` 為 `k8sgpt-aiops`，`roleArn` 指向 Stack 03 輸出的 `K8sGptRoleArn`。

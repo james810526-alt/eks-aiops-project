@@ -168,7 +168,7 @@ kubectl get pods -A
   ```bash
   aws cloudformation create-stack \
     --stack-name nkc201-17-security \
-    --template-body file://CloudFromation/nkc201-17-02-security-stack.yaml \
+    --template-body file://CloudFormation/nkc201-17-02-security-stack.yaml \
     --parameters ParameterKey=VpcId,ParameterValue=vpc-00f9f872d1cede59e
   ```
 
@@ -176,7 +176,7 @@ kubectl get pods -A
   ```bash
   aws cloudformation create-stack \
     --stack-name nkc201-17-iam \
-    --template-body file://CloudFromation/nkc201-17-03-iam-stack.yaml \
+    --template-body file://CloudFormation/nkc201-17-03-iam-stack.yaml \
     --capabilities CAPABILITY_NAMED_IAM
   ```
 
@@ -184,7 +184,7 @@ kubectl get pods -A
   ```bash
   aws cloudformation create-stack \
     --stack-name nkc201-17-cluster \
-    --template-body file://CloudFromation/nkc201-17-04-eks-cluster-stack.yaml \
+    --template-body file://CloudFormation/nkc201-17-04-eks-cluster-stack.yaml \
     --parameters \
       ParameterKey=EksClusterRoleArn,ParameterValue=<您的EksClusterRoleArn> \
       ParameterKey=SecurityGroupIds,ParameterValue=<您的EksClusterSecurityGroupId> \
@@ -199,21 +199,22 @@ kubectl get pods -A
   > # 範例 A (PowerShell)
   > aws cloudformation create-stack `
   >   --stack-name nkc201-17-security `
-  >   --template-body (Get-Content CloudFromation/nkc201-17-02-security-stack.yaml -Raw -Encoding UTF8) `
+  >   --template-body (Get-Content CloudFormation/nkc201-17-02-security-stack.yaml -Raw -Encoding UTF8) `
   >   --parameters ParameterKey=VpcId,ParameterValue=vpc-00f9f872d1cede59e
   > 
   > # 範例 B (PowerShell)
   > aws cloudformation create-stack `
   >   --stack-name nkc201-17-iam `
-  >   --template-body (Get-Content CloudFromation/nkc201-17-03-iam-stack.yaml -Raw -Encoding UTF8) `
+  >   --template-body (Get-Content CloudFormation/nkc201-17-03-iam-stack.yaml -Raw -Encoding UTF8) `
   >   --capabilities CAPABILITY_NAMED_IAM
   > 
   > # 範例 C (PowerShell)
   > aws cloudformation create-stack `
   >   --stack-name nkc201-17-cluster `
-  >   --template-body (Get-Content CloudFromation/nkc201-17-04-eks-cluster-stack.yaml -Raw -Encoding UTF8) `
+  >   --template-body (Get-Content CloudFormation/nkc201-17-04-eks-cluster-stack.yaml -Raw -Encoding UTF8) `
   >   --parameters `
   >     ParameterKey=EksClusterRoleArn,ParameterValue=<您的EksClusterRoleArn> `
   >     ParameterKey=SecurityGroupIds,ParameterValue=<您的EksClusterSecurityGroupId> `
   >     ParameterKey=SubnetIds,ParameterValue=<PrivateAppSubnetA的ID>,<PrivateAppSubnetB的ID>,<PrivateAppSubnetC的ID>
   > ```
+

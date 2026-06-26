@@ -87,7 +87,14 @@ sequenceDiagram
 
 ## 🛠️ 完整的 CloudFormation 藍圖
 
-已寫入：`CloudFromation/nkc201-17-08-aiops-stack.yaml`
+已寫入：`CloudFormation/nkc201-17-08-aiops-stack.yaml`
+
+> [!IMPORTANT]
+> **2026-06-26 實作更新**
+> - 最新範本已移除 Lambda `ReservedConcurrentExecutions`。實測帳號若保留 `ReservedConcurrentExecutions: 2`，會因帳號最低未保留併發限制 `[10]` 而導致 `AioOpsHandler CREATE_FAILED`。
+> - Lambda 呼叫 Bedrock 的 prompt 已要求以繁體中文輸出，並限制診斷報告約 600 個中文字內，避免報告過長與 token 浪費。
+> - Bedrock `max_tokens` 已調整為 `700`。
+> - Anthropic Claude 3 Haiku 在首次使用前需要到 Bedrock Console 提交 **Submit use case details**；若未提交，K8sGPT 或 Lambda 呼叫會出現 `Model use case details have not been submitted for this account`。
 
 ---
 
@@ -116,7 +123,7 @@ PRIVATE_SUBNETS="${SUBNET_A},${SUBNET_B},${SUBNET_C}"
 
 # 4. 部署 AIOps Stack (Stack 08)
 aws cloudformation deploy \
-  --template-file CloudFromation/nkc201-17-08-aiops-stack.yaml \
+  --template-file CloudFormation/nkc201-17-08-aiops-stack.yaml \
   --stack-name nkc201-17-08-aiops-stack \
   --parameter-overrides \
       VpcId="$VPC_ID" \
@@ -134,7 +141,7 @@ aws cloudformation deploy \
 
 > [!IMPORTANT]
 > **步驟二：確認 Amazon Bedrock 模型存取權**
-> 本專題之 Lambda 將在 `ap-south-1` 區域調用 Bedrock 模型。因 AWS 目前在孟買區已自動開放 Bedrock 基礎模型存取（無須再手動點選橘色按鈕申請），Lambda 可直接調用。請確保您的 AWS 帳戶無組織層級的 Service Control Policies (SCP) 阻擋 Bedrock 服務。
+> 本專題之 Lambda 與 K8sGPT 會在 `ap-south-1` 區域調用 `anthropic.claude-3-haiku-20240307-v1:0`。首次使用 Anthropic 模型前，需在 Amazon Bedrock 的 Claude 3 Haiku 頁面提交 **use case details**。送出後通常需等待數分鐘同步，實測錯誤訊息可能提示最多等待約 15 分鐘。請同時確認 AWS 帳戶無組織層級的 Service Control Policies (SCP) 阻擋 Bedrock 服務。
 
 #### 🧪 測試 Webhook 與 AI 診斷
 您可以透過跳板機或本機使用 `curl` 模擬 K8sGPT 發送錯誤：
